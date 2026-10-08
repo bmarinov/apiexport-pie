@@ -8,6 +8,7 @@ type Model struct {
 	Exports        []Export
 	Schemas        []Schema
 	WorkspaceTypes []WorkspaceType
+	APIBindings    []APIBinding
 }
 
 // Export is an APIExport and the resources it serves.
@@ -18,6 +19,15 @@ type Export struct {
 	Doc       int
 	Name      string
 	Resources []Resource
+	Claims    []Claim
+}
+
+// Claim is a permission claim: the export's provider asks every consumer for access to Resource
+// in Group, with these Verbs.
+type Claim struct {
+	Group    string
+	Resource string
+	Verbs    []string
 }
 
 // location is where an object is written down, in the path#N form diagnostics use.
@@ -89,4 +99,15 @@ type ExportRef struct {
 type TypeRef struct {
 	Path string
 	Name string
+}
+
+// APIBinding is a binding written down as a manifest: whatever workspace it is applied to binds
+// Export.
+type APIBinding struct {
+	// Path is the slash-separated manifest file, relative to the scanned tree, and Doc the
+	// document's position in it.
+	Path   string
+	Doc    int
+	Name   string
+	Export ExportRef
 }

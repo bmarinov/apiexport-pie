@@ -74,15 +74,30 @@ func TestScan(t *testing.T) {
 			fsys: fstest.MapFS{
 				"export.yaml": manifest(t, apiExportV1alpha1("core.example.io", "v1.widgets.core.example.io", "v1.gadgets.core.example.io")),
 			},
-			want: pie.Model{Exports: []pie.Export{coreExportAt("export.yaml")}},
+			want: pie.Model{Exports: []pie.Export{withClaims(coreExportAt("export.yaml"), pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}})}},
 		},
 		{
 			name: "puts a v1alpha1 schema of the core group in the empty group, as kcp does",
 			fsys: fstest.MapFS{
 				"export.yaml": manifest(t, apiExportV1alpha1("legacy.example.io", "v1.configmaps.core")),
 			},
-			want: pie.Model{Exports: []pie.Export{{Path: "export.yaml", Doc: 1, Name: "legacy.example.io", Resources: []pie.Resource{
+			want: pie.Model{Exports: []pie.Export{withClaims(pie.Export{Path: "export.yaml", Doc: 1, Name: "legacy.example.io", Resources: []pie.Resource{
 				{Group: "", Name: "configmaps", Schema: "v1.configmaps.core"},
+			}}, pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}})}},
+		},
+		{
+			name: "records what an export claims",
+			fsys: fstest.MapFS{"export.yaml": manifest(t, func() *apisv1alpha2.APIExport {
+				e := apiExport("terminal.example.io")
+				e.Spec.PermissionClaims = []apisv1alpha2.PermissionClaim{
+					{GroupResource: apisv1alpha2.GroupResource{Group: "core.example.io", Resource: "accountinfos"}, Verbs: []string{"get", "list", "watch"}},
+					{GroupResource: apisv1alpha2.GroupResource{Resource: "secrets"}, Verbs: []string{"*"}},
+				}
+				return e
+			}())},
+			want: pie.Model{Exports: []pie.Export{{Path: "export.yaml", Doc: 1, Name: "terminal.example.io", Claims: []pie.Claim{
+				{Group: "core.example.io", Resource: "accountinfos", Verbs: []string{"get", "list", "watch"}},
+				{Group: "", Resource: "secrets", Verbs: []string{"*"}},
 			}}}},
 		},
 		{
@@ -105,11 +120,11 @@ func TestScan(t *testing.T) {
 			name: "skips kinds other than kcp APIExport and APIResourceSchema",
 			fsys: fstest.MapFS{
 				"configmap.yaml": {Data: []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: settings\n")},
-				"binding.yaml":   manifest(t, apiBinding("core.example.io")),
+				"slice.yaml":     {Data: []byte("apiVersion: apis.kcp.io/v1alpha1\nkind: APIExportEndpointSlice\nmetadata:\n  name: core.example.io\n")},
 				"foreign.yaml":   {Data: []byte("apiVersion: example.io/v1\nkind: APIExport\nmetadata:\n  name: lookalike\n")},
 			},
 			want:      pie.Model{},
-			wantDiags: []string{"skipped binding.yaml#1", "skipped configmap.yaml#1", "skipped foreign.yaml#1"},
+			wantDiags: []string{"skipped configmap.yaml#1", "skipped foreign.yaml#1", "skipped slice.yaml#1"},
 		},
 		{
 			name: "finds WorkspaceTypes with the exports they bind and the types they extend",
@@ -123,6 +138,41 @@ func TestScan(t *testing.T) {
 				Binds:   []pie.ExportRef{{Path: "root:providers", Name: "core.example.io"}, {Path: "", Name: "local.example.io"}},
 				Extends: []pie.TypeRef{{Path: "root", Name: "security"}},
 			}}},
+		},
+		{
+			name: "finds APIBindings and the export each binds, reading v1alpha1 through kcp's conversion",
+			fsys: fstest.MapFS{
+				"a.yaml": manifest(t, apiBinding("core.example.io")),
+				"b.yaml": manifest(t, apiBindingV1alpha1("legacy.example.io")),
+			},
+			want: pie.Model{APIBindings: []pie.APIBinding{
+				{Path: "a.yaml", Doc: 1, Name: "core.example.io", Export: pie.ExportRef{Path: "root:providers", Name: "core.example.io"}},
+				{Path: "b.yaml", Doc: 1, Name: "legacy.example.io", Export: pie.ExportRef{Path: "root:providers", Name: "legacy.example.io"}},
+			}},
+		},
+		{
+			name:      "warns about a v1alpha1 APIBinding without a name and does not draw it",
+			fsys:      fstest.MapFS{"binding.yaml": manifest(t, apiBindingV1alpha1(""))},
+			want:      pie.Model{},
+			wantDiags: []string{"warning binding.yaml#1"},
+		},
+		{
+			name: "warns about a v1alpha1 APIBinding that kcp cannot convert",
+			fsys: fstest.MapFS{"binding.yaml": manifest(t, func() *apisv1alpha1.APIBinding {
+				b := apiBindingV1alpha1("legacy.example.io")
+				b.Annotations = map[string]string{apisv1alpha2.AcceptablePermissionClaimsAnnotation: "not json"}
+				return b
+			}())},
+			want:      pie.Model{},
+			wantDiags: []string{"warning binding.yaml#1"},
+		},
+		{
+			name: "warns about an APIBinding that names no export",
+			fsys: fstest.MapFS{
+				"binding.yaml": {Data: []byte("apiVersion: apis.kcp.io/v1alpha2\nkind: APIBinding\nmetadata:\n  name: nothing\nspec:\n  reference: {}\n")},
+			},
+			want:      pie.Model{},
+			wantDiags: []string{"warning binding.yaml#1"},
 		},
 		{
 			name: "ignores files without a YAML extension",
@@ -210,7 +260,7 @@ spec:
     identityHash: {{ .tenancyIdentityHash }}
     verbs: ["*"]
 `,
-			want: pie.Model{Exports: []pie.Export{widgetsOnly}},
+			want: pie.Model{Exports: []pie.Export{withClaims(widgetsOnly, pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}})}},
 		},
 		{
 			name: "a templated field that is not a string decodes as its zero value",
@@ -313,6 +363,11 @@ func TestScanSaysWhyADocumentIsNotDrawn(t *testing.T) {
 			wantReason: "APIExport does not convert to v1alpha2: ",
 		},
 		{
+			name:       "an APIBinding that names no export",
+			manifest:   "apiVersion: apis.kcp.io/v1alpha2\nkind: APIBinding\nmetadata:\n  name: nothing\nspec:\n  reference: {}\n",
+			wantReason: "APIBinding names no export",
+		},
+		{
 			name:       "an APIResourceSchema without a name",
 			manifest:   "apiVersion: apis.kcp.io/v1alpha1\nkind: APIResourceSchema\nmetadata: {}\n",
 			wantReason: "APIResourceSchema has no metadata.name",
@@ -399,7 +454,7 @@ func TestRenderD2(t *testing.T) {
 `,
 		},
 		{
-			name: "shows the plural where the schema is not in the tree",
+			name: "marks a resource whose schema is not in the tree, naming it by its plural",
 			model: pie.Model{Exports: []pie.Export{{Path: "ws/export.yaml", Doc: 1, Name: "legacy.example.io", Resources: []pie.Resource{
 				{Group: "", Name: "configmaps", Schema: "v1.configmaps.core"},
 				{Group: "legacy.example.io", Name: "things", Schema: "v260213-fbdf981.things.legacy.example.io"},
@@ -407,8 +462,8 @@ func TestRenderD2(t *testing.T) {
 			want: `"apiexport:ws/export.yaml#1": {
   shape: sql_table
   label: "APIExport legacy.example.io"
-  "configmaps": "configmaps" {constraint: "v1"}
-  "things": "things.legacy.example.io" {constraint: "v260213-fbdf981"}
+  "configmaps": "configmaps" {constraint: "v1 · not in tree"}
+  "things": "things.legacy.example.io" {constraint: "v260213-fbdf981 · not in tree"}
 }
 `,
 		},
@@ -500,7 +555,94 @@ func TestRenderD2(t *testing.T) {
 `,
 		},
 		{
-			name: "lists schemas no export serves by name, with their kind",
+			name: "an export serving a resource another export serves is orange and says where else",
+			model: pie.Model{
+				Exports: []pie.Export{
+					{Path: "ws/a.yaml", Doc: 1, Name: "a.example.io", Resources: []pie.Resource{widgetResource(), gadgetResource()}},
+					{Path: "ws/b.yaml", Doc: 1, Name: "b.example.io", Resources: []pie.Resource{widgetResource()}},
+					{Path: "ws/c.yaml", Doc: 1, Name: "c.example.io", Resources: []pie.Resource{widgetResource()}},
+				},
+				Schemas: []pie.Schema{gadgetSchemaAt("ws/gadgets.yaml"), widgetSchemaAt("ws/widgets.yaml")},
+			},
+			want: `"apiexport:ws/a.yaml#1": {
+  shape: sql_table
+  label: "APIExport a.example.io"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in b.example.io, c.example.io"}
+  "Gadget": "gadgets.core.example.io" {constraint: "v1"}
+}
+"apiexport:ws/b.yaml#1": {
+  shape: sql_table
+  label: "APIExport b.example.io"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in a.example.io, c.example.io"}
+}
+"apiexport:ws/c.yaml#1": {
+  shape: sql_table
+  label: "APIExport c.example.io"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in a.example.io, b.example.io"}
+}
+` + legend(legendShared),
+		},
+		{
+			name: "copies of an export count as one, and never against themselves",
+			model: pie.Model{
+				Exports: []pie.Export{
+					{Path: "config/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource()}},
+					{Path: "test/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource()}},
+					{Path: "ws/other.yaml", Doc: 1, Name: "other.example.io", Resources: []pie.Resource{widgetResource()}},
+				},
+				Schemas: []pie.Schema{widgetSchemaAt("ws/widgets.yaml")},
+			},
+			want: `"apiexport:config/core.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io · config/core.yaml#1"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in other.example.io"}
+}
+"apiexport:test/core.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io · test/core.yaml#1"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in other.example.io"}
+}
+"apiexport:ws/other.yaml#1": {
+  shape: sql_table
+  label: "APIExport other.example.io"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in core.example.io"}
+}
+` + legend(legendShared),
+		},
+		{
+			name: "a resource of the same name in another group is another resource",
+			model: pie.Model{
+				Exports: []pie.Export{
+					{Path: "ws/a.yaml", Doc: 1, Name: "a.example.io", Resources: []pie.Resource{widgetResource()}},
+					{Path: "ws/b.yaml", Doc: 1, Name: "b.example.io", Resources: []pie.Resource{
+						{Group: "other.example.io", Name: "widgets", Schema: "v1.widgets.other.example.io"},
+					}},
+				},
+				Schemas: []pie.Schema{
+					widgetSchemaAt("ws/widgets.yaml"),
+					{Path: "ws/widgets.yaml", Name: "v1.widgets.other.example.io", Group: "other.example.io", Kind: "Widget", Plural: "widgets"},
+				},
+			},
+			want: `"apiexport:ws/a.yaml#1": {
+  shape: sql_table
+  label: "APIExport a.example.io"
+  "Widget": "widgets.core.example.io" {constraint: "v1"}
+}
+"apiexport:ws/b.yaml#1": {
+  shape: sql_table
+  label: "APIExport b.example.io"
+  "Widget": "widgets.other.example.io" {constraint: "v1"}
+}
+`,
+		},
+		{
+			name: "lists schemas no export serves by name, with their kind, in a muted table",
 			model: pie.Model{
 				Exports: []pie.Export{{Path: "ws/export.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource()}}},
 				Schemas: []pie.Schema{gadgetSchemaAt("ws/gadgets.yaml"), widgetSchemaAt("ws/widgets.yaml")},
@@ -513,6 +655,8 @@ func TestRenderD2(t *testing.T) {
 "unserved": {
   shape: sql_table
   label: "APIResourceSchemas no export serves"
+  style.fill: "#868e96"
+  style.stroke-dash: 3
   "v1.gadgets.core.example.io": "Gadget"
 }
 `,
@@ -551,8 +695,8 @@ func TestRenderD2DrawsUseCases(t *testing.T) {
   label: "WorkspaceType account"
   "core.example.io": "root:pms"
 }
-` + coreTable + `"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1"
-`,
+` + coreTable + `"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
+` + legend(legendBindsByDefault),
 		},
 		{
 			name: "an export outside the tree is drawn once, as a dashed box, and an empty path is the type's own workspace",
@@ -581,10 +725,10 @@ func TestRenderD2DrawsUseCases(t *testing.T) {
   "tenancy.kcp.io @ root"
   "local.example.io @ (own workspace)"
 }
-"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root"
-"workspacetype:types/account.yaml#1"."local.example.io" -> "outside"."local.example.io @ (own workspace)"
-"workspacetype:types/org.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root"
-`,
+"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."local.example.io" -> "outside"."local.example.io @ (own workspace)" {style.stroke: "#1971c2"}
+"workspacetype:types/org.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+` + legend(legendBindsByDefault),
 		},
 		{
 			name: "bindings inherited through extend are listed once, after the type's own, naming the type that declares them",
@@ -626,14 +770,72 @@ func TestRenderD2DrawsUseCases(t *testing.T) {
   "audit.example.io @ root:audit"
   "tenancy.kcp.io @ root"
 }
-"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1"
-"workspacetype:types/account.yaml#1"."audit.example.io" -> "outside"."audit.example.io @ root:audit"
-"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root"
-"workspacetype:types/security.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1"
-"workspacetype:types/security.yaml#1"."audit.example.io" -> "outside"."audit.example.io @ root:audit"
-"workspacetype:types/security.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root"
-"workspacetype:types/base.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root"
-`,
+"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."audit.example.io" -> "outside"."audit.example.io @ root:audit" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+"workspacetype:types/security.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
+"workspacetype:types/security.yaml#1"."audit.example.io" -> "outside"."audit.example.io @ root:audit" {style.stroke: "#1971c2"}
+"workspacetype:types/security.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+"workspacetype:types/base.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+` + legend(legendBindsByDefault, legendBindsThroughExtend),
+		},
+		{
+			name: "APIBinding files are grouped by directory, each listing the exports bound there once",
+			model: pie.Model{
+				Exports: []pie.Export{coreHere},
+				APIBindings: []pie.APIBinding{
+					{Path: "pms/a.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
+					{Path: "features/x/c.yaml", Doc: 1, Name: "providers", Export: pie.ExportRef{Path: "root:pms", Name: "providers.example.io"}},
+					{Path: "pms/b.yaml", Doc: 1, Name: "system", Export: pie.ExportRef{Name: "system.example.io"}},
+					{Path: "pms/d.yaml", Doc: 1, Name: "core-again", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
+				},
+			},
+			want: `"apibindings:pms": {
+  shape: sql_table
+  label: "APIBindings in pms"
+  "core.example.io": "root:pms"
+  "system.example.io": "(own workspace)"
+}
+"apibindings:features/x": {
+  shape: sql_table
+  label: "APIBindings in features/x"
+  "providers.example.io": "root:pms"
+}
+` + coreTable + `"outside": {
+  label: "APIExports outside the tree"
+  style.stroke-dash: 3
+  "system.example.io @ (own workspace)"
+  "providers.example.io @ root:pms"
+}
+"apibindings:pms"."core.example.io" -> "apiexport:pms/export.yaml#1" {style.stroke: "#2f9e44"}
+"apibindings:pms"."system.example.io" -> "outside"."system.example.io @ (own workspace)" {style.stroke: "#2f9e44"}
+"apibindings:features/x"."providers.example.io" -> "outside"."providers.example.io @ root:pms" {style.stroke: "#2f9e44"}
+` + legend(legendBindsByAPIBinding),
+		},
+		{
+			name: "WorkspaceTypes and APIBinding files share the box of an export outside the tree",
+			model: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/org.yaml", Doc: 1, Name: "org", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}}}},
+				APIBindings:    []pie.APIBinding{{Path: "pms/t.yaml", Doc: 1, Name: "tenancy", Export: pie.ExportRef{Path: "root", Name: "tenancy.kcp.io"}}},
+			},
+			want: `"workspacetype:types/org.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType org"
+  "tenancy.kcp.io": "root"
+}
+"apibindings:pms": {
+  shape: sql_table
+  label: "APIBindings in pms"
+  "tenancy.kcp.io": "root"
+}
+"outside": {
+  label: "APIExports outside the tree"
+  style.stroke-dash: 3
+  "tenancy.kcp.io @ root"
+}
+"workspacetype:types/org.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+"apibindings:pms"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#2f9e44"}
+` + legend(legendBindsByDefault, legendBindsByAPIBinding),
 		},
 		{
 			name: "types that extend each other stop where they started",
@@ -659,11 +861,11 @@ func TestRenderD2DrawsUseCases(t *testing.T) {
   "a.example.io @ root"
   "b.example.io @ root"
 }
-"workspacetype:types/a.yaml#1"."a.example.io" -> "outside"."a.example.io @ root"
-"workspacetype:types/a.yaml#1"."b.example.io" -> "outside"."b.example.io @ root"
-"workspacetype:types/b.yaml#1"."b.example.io" -> "outside"."b.example.io @ root"
-"workspacetype:types/b.yaml#1"."a.example.io" -> "outside"."a.example.io @ root"
-`,
+"workspacetype:types/a.yaml#1"."a.example.io" -> "outside"."a.example.io @ root" {style.stroke: "#1971c2"}
+"workspacetype:types/a.yaml#1"."b.example.io" -> "outside"."b.example.io @ root" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+"workspacetype:types/b.yaml#1"."b.example.io" -> "outside"."b.example.io @ root" {style.stroke: "#1971c2"}
+"workspacetype:types/b.yaml#1"."a.example.io" -> "outside"."a.example.io @ root" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+` + legend(legendBindsByDefault, legendBindsThroughExtend),
 		},
 		{
 			name: "a binding points at every export of that name in the tree, and repeated type names show their document",
@@ -691,9 +893,9 @@ func TestRenderD2DrawsUseCases(t *testing.T) {
   shape: sql_table
   label: "APIExport core.example.io · test/export.yaml#1"
 }
-"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1"
-"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:test/export.yaml#1"
-`,
+"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:test/export.yaml#1" {style.stroke: "#1971c2"}
+` + legend(legendBindsByDefault),
 		},
 	}
 	for _, tt := range tests {
@@ -705,8 +907,407 @@ func TestRenderD2DrawsUseCases(t *testing.T) {
 	}
 }
 
+func TestRenderD2DrawsClaims(t *testing.T) {
+	infos := pie.Resource{Group: "core.example.io", Name: "accountinfos", Schema: "v1.accountinfos.core.example.io"}
+	infosSchema := pie.Schema{Path: "pms/infos.yaml", Name: "v1.accountinfos.core.example.io", Group: "core.example.io", Kind: "AccountInfo", Plural: "accountinfos"}
+	readInfos := pie.Claim{Group: "core.example.io", Resource: "accountinfos", Verbs: []string{"get", "list", "watch"}}
+
+	tests := []struct {
+		name  string
+		model pie.Model
+		want  string
+	}{
+		{
+			name: "an export's header counts its permission claims",
+			model: pie.Model{Exports: []pie.Export{{Path: "ws/export.yaml", Doc: 1, Name: "core.example.io", Claims: []pie.Claim{
+				{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}},
+				{Group: "", Resource: "secrets", Verbs: []string{"get"}},
+			}}}},
+			want: `"apiexport:ws/export.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io · 2 claims"
+}
+`,
+		},
+		{
+			name: "a claim on a resource another export serves points at that kind, with the verbs",
+			model: pie.Model{
+				Exports: []pie.Export{
+					{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{infos}},
+					{Path: "pms/terminal.yaml", Doc: 1, Name: "terminal.example.io", Claims: []pie.Claim{readInfos}},
+				},
+				Schemas: []pie.Schema{infosSchema},
+			},
+			want: `"apiexport:pms/core.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io"
+  "AccountInfo": "accountinfos.core.example.io" {constraint: "v1"}
+}
+"apiexport:pms/terminal.yaml#1": {
+  shape: sql_table
+  label: "APIExport terminal.example.io · 1 claim"
+}
+"apiexport:pms/terminal.yaml#1" -> "apiexport:pms/core.yaml#1"."AccountInfo": "claims get, list, watch" {style.stroke: "#7048e8"; style.stroke-dash: 4}
+` + legend(legendClaims),
+		},
+		{
+			name: "a claim points at every export in the tree that serves the resource",
+			model: pie.Model{
+				Exports: []pie.Export{
+					{Path: "pms/terminal.yaml", Doc: 1, Name: "terminal.example.io", Claims: []pie.Claim{readInfos}},
+					{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{infos}},
+					{Path: "test/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{infos}},
+				},
+			},
+			want: `"apiexport:pms/terminal.yaml#1": {
+  shape: sql_table
+  label: "APIExport terminal.example.io · 1 claim"
+}
+"apiexport:pms/core.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io · pms/core.yaml#1"
+  "accountinfos": "accountinfos.core.example.io" {constraint: "v1 · not in tree"}
+}
+"apiexport:test/core.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io · test/core.yaml#1"
+  "accountinfos": "accountinfos.core.example.io" {constraint: "v1 · not in tree"}
+}
+"apiexport:pms/terminal.yaml#1" -> "apiexport:pms/core.yaml#1"."accountinfos": "claims get, list, watch" {style.stroke: "#7048e8"; style.stroke-dash: 4}
+"apiexport:pms/terminal.yaml#1" -> "apiexport:test/core.yaml#1"."accountinfos": "claims get, list, watch" {style.stroke: "#7048e8"; style.stroke-dash: 4}
+` + legend(legendClaims),
+		},
+		{
+			name: "a claim points at the row its kind ends up with when kinds repeat",
+			model: pie.Model{
+				Exports: []pie.Export{
+					{Path: "ws/mixed.yaml", Doc: 1, Name: "mixed.example.io", Resources: []pie.Resource{
+						{Group: "core.example.io", Name: "widgets", Schema: "v1.widgets.core.example.io"},
+						{Group: "other.example.io", Name: "widgets", Schema: "v1.widgets.other.example.io"},
+					}},
+					{Path: "ws/user.yaml", Doc: 1, Name: "user.example.io", Claims: []pie.Claim{
+						{Group: "other.example.io", Resource: "widgets", Verbs: []string{"*"}},
+					}},
+				},
+				Schemas: []pie.Schema{
+					widgetSchemaAt("ws/widgets.yaml"),
+					{Path: "ws/widgets.yaml", Name: "v1.widgets.other.example.io", Group: "other.example.io", Kind: "Widget", Plural: "widgets"},
+				},
+			},
+			want: `"apiexport:ws/mixed.yaml#1": {
+  shape: sql_table
+  label: "APIExport mixed.example.io"
+  "Widget (core.example.io)": "widgets.core.example.io" {constraint: "v1"}
+  "Widget (other.example.io)": "widgets.other.example.io" {constraint: "v1"}
+}
+"apiexport:ws/user.yaml#1": {
+  shape: sql_table
+  label: "APIExport user.example.io · 1 claim"
+}
+"apiexport:ws/user.yaml#1" -> "apiexport:ws/mixed.yaml#1"."Widget (other.example.io)": "claims *" {style.stroke: "#7048e8"; style.stroke-dash: 4}
+` + legend(legendClaims),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderD2(tt.model)); got != tt.want {
+				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderD2FlagsBindingsKcpRefuses(t *testing.T) {
+	exportOf := func(path, name string, resources ...pie.Resource) pie.Export {
+		return pie.Export{Path: path, Doc: 1, Name: name, Resources: resources}
+	}
+	widgetsInAAndB := `"apiexport:ws/a.yaml#1": {
+  shape: sql_table
+  label: "APIExport a.example.io"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in b.example.io"}
+}
+"apiexport:ws/b.yaml#1": {
+  shape: sql_table
+  label: "APIExport b.example.io"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in a.example.io"}
+}
+`
+	tests := []struct {
+		name  string
+		model pie.Model
+		want  string
+	}{
+		{
+			name: "a WorkspaceType binding two exports that serve one resource is red, and its rows say what conflicts",
+			model: pie.Model{
+				Exports: []pie.Export{
+					exportOf("ws/a.yaml", "a.example.io", widgetResource(), gadgetResource()),
+					exportOf("ws/b.yaml", "b.example.io", widgetResource()),
+					exportOf("ws/c.yaml", "c.example.io", gadgetResource()),
+				},
+				Schemas: []pie.Schema{gadgetSchemaAt("ws/gadgets.yaml"), widgetSchemaAt("ws/widgets.yaml")},
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{
+					{Path: "root:pms", Name: "a.example.io"}, {Path: "root:pms", Name: "b.example.io"}, {Path: "root:pms", Name: "c.example.io"},
+				}}},
+			},
+			want: `"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account"
+  style.fill: "#e03131"
+  "a.example.io": "root:pms · conflicts with b.example.io on widgets.core.example.io, c.example.io on gadgets.core.example.io"
+  "b.example.io": "root:pms · conflicts with a.example.io on widgets.core.example.io"
+  "c.example.io": "root:pms · conflicts with a.example.io on gadgets.core.example.io"
+}
+"apiexport:ws/a.yaml#1": {
+  shape: sql_table
+  label: "APIExport a.example.io"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in b.example.io"}
+  "Gadget": "gadgets.core.example.io" {constraint: "v1 · also in c.example.io"}
+}
+"apiexport:ws/b.yaml#1": {
+  shape: sql_table
+  label: "APIExport b.example.io"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in a.example.io"}
+}
+"apiexport:ws/c.yaml#1": {
+  shape: sql_table
+  label: "APIExport c.example.io"
+  style.fill: "#f08c00"
+  "Gadget": "gadgets.core.example.io" {constraint: "v1 · also in a.example.io"}
+}
+"workspacetype:types/account.yaml#1"."a.example.io" -> "apiexport:ws/a.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/account.yaml#1"."b.example.io" -> "apiexport:ws/b.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/account.yaml#1"."c.example.io" -> "apiexport:ws/c.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+` + legend(legendBindsRefused, legendShared),
+		},
+		{
+			name: "a binding inherited through extend conflicts in the type that inherits it",
+			model: pie.Model{
+				Exports: []pie.Export{exportOf("ws/a.yaml", "a.example.io", widgetResource()), exportOf("ws/b.yaml", "b.example.io", widgetResource())},
+				Schemas: []pie.Schema{widgetSchemaAt("ws/widgets.yaml")},
+				WorkspaceTypes: []pie.WorkspaceType{
+					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "a.example.io"}}, Extends: []pie.TypeRef{{Name: "base"}}},
+					{Path: "types/base.yaml", Doc: 1, Name: "base", Binds: []pie.ExportRef{{Path: "root:pms", Name: "b.example.io"}}},
+				},
+			},
+			want: `"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account · extends base"
+  style.fill: "#e03131"
+  "a.example.io": "root:pms · conflicts with b.example.io on widgets.core.example.io"
+  "b.example.io": "root:pms · via base · conflicts with a.example.io on widgets.core.example.io"
+}
+"workspacetype:types/base.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType base"
+  "b.example.io": "root:pms"
+}
+` + widgetsInAAndB + `"workspacetype:types/account.yaml#1"."a.example.io" -> "apiexport:ws/a.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/account.yaml#1"."b.example.io" -> "apiexport:ws/b.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/base.yaml#1"."b.example.io" -> "apiexport:ws/b.yaml#1" {style.stroke: "#1971c2"}
+` + legend(legendBindsByDefault, legendBindsRefused, legendShared),
+		},
+		{
+			name: "a directory of APIBinding files binding two exports that serve one resource is red",
+			model: pie.Model{
+				Exports: []pie.Export{exportOf("ws/a.yaml", "a.example.io", widgetResource()), exportOf("ws/b.yaml", "b.example.io", widgetResource())},
+				Schemas: []pie.Schema{widgetSchemaAt("ws/widgets.yaml")},
+				APIBindings: []pie.APIBinding{
+					{Path: "pms/a.yaml", Doc: 1, Name: "a", Export: pie.ExportRef{Path: "root:pms", Name: "a.example.io"}},
+					{Path: "pms/b.yaml", Doc: 1, Name: "b", Export: pie.ExportRef{Path: "root:pms", Name: "b.example.io"}},
+				},
+			},
+			want: `"apibindings:pms": {
+  shape: sql_table
+  label: "APIBindings in pms"
+  style.fill: "#e03131"
+  "a.example.io": "root:pms · conflicts with b.example.io on widgets.core.example.io"
+  "b.example.io": "root:pms · conflicts with a.example.io on widgets.core.example.io"
+}
+` + widgetsInAAndB + `"apibindings:pms"."a.example.io" -> "apiexport:ws/a.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"apibindings:pms"."b.example.io" -> "apiexport:ws/b.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+` + legend(legendBindsRefused, legendShared),
+		},
+		{
+			name: "copies of an export conflict once, and every copy's edge turns red",
+			model: pie.Model{
+				Exports: []pie.Export{
+					exportOf("pms/core.yaml", "core.example.io", widgetResource()),
+					exportOf("test/core.yaml", "core.example.io", widgetResource()),
+					exportOf("ws/other.yaml", "other.example.io", widgetResource()),
+				},
+				Schemas: []pie.Schema{widgetSchemaAt("ws/widgets.yaml")},
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{
+					{Path: "root:pms", Name: "core.example.io"}, {Path: "root:pms", Name: "other.example.io"},
+				}}},
+			},
+			want: `"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account"
+  style.fill: "#e03131"
+  "core.example.io": "root:pms · conflicts with other.example.io on widgets.core.example.io"
+  "other.example.io": "root:pms · conflicts with core.example.io on widgets.core.example.io"
+}
+"apiexport:pms/core.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io · pms/core.yaml#1"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in other.example.io"}
+}
+"apiexport:test/core.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io · test/core.yaml#1"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in other.example.io"}
+}
+"apiexport:ws/other.yaml#1": {
+  shape: sql_table
+  label: "APIExport other.example.io"
+  style.fill: "#f08c00"
+  "Widget": "widgets.core.example.io" {constraint: "v1 · also in core.example.io"}
+}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/core.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:test/core.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/account.yaml#1"."other.example.io" -> "apiexport:ws/other.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+` + legend(legendBindsRefused, legendShared),
+		},
+		{
+			name: "copies of one export and exports outside the tree never conflict",
+			model: pie.Model{
+				Exports: []pie.Export{exportOf("pms/core.yaml", "core.example.io", widgetResource()), exportOf("test/core.yaml", "core.example.io", widgetResource())},
+				Schemas: []pie.Schema{widgetSchemaAt("ws/widgets.yaml")},
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{
+					{Path: "root:pms", Name: "core.example.io"}, {Path: "root", Name: "tenancy.kcp.io"},
+				}}},
+			},
+			want: `"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account"
+  "core.example.io": "root:pms"
+  "tenancy.kcp.io": "root"
+}
+"apiexport:pms/core.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io · pms/core.yaml#1"
+  "Widget": "widgets.core.example.io" {constraint: "v1"}
+}
+"apiexport:test/core.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io · test/core.yaml#1"
+  "Widget": "widgets.core.example.io" {constraint: "v1"}
+}
+"outside": {
+  label: "APIExports outside the tree"
+  style.stroke-dash: 3
+  "tenancy.kcp.io @ root"
+}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:test/core.yaml#1" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+` + legend(legendBindsByDefault),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderD2(tt.model)); got != tt.want {
+				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderD2ExplainsTheRelationsItDraws(t *testing.T) {
+	tests := []struct {
+		name  string
+		model pie.Model
+		want  string
+	}{
+		{
+			name: "the legend lists relations in a fixed order, whichever is drawn first",
+			model: pie.Model{WorkspaceTypes: []pie.WorkspaceType{
+				{Path: "types/account.yaml", Doc: 1, Name: "account", Extends: []pie.TypeRef{{Name: "base"}}},
+				{Path: "types/base.yaml", Doc: 1, Name: "base", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}}},
+			}},
+			want: `"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account · extends base"
+  "tenancy.kcp.io": "root · via base"
+}
+"workspacetype:types/base.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType base"
+  "tenancy.kcp.io": "root"
+}
+"outside": {
+  label: "APIExports outside the tree"
+  style.stroke-dash: 3
+  "tenancy.kcp.io @ root"
+}
+"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+"workspacetype:types/base.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+` + legend(legendBindsByDefault, legendBindsThroughExtend),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderD2(tt.model)); got != tt.want {
+				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+// legend is the box a diagram ends with, drawing one example edge per relation it shows.
+func legend(entries ...string) string {
+	return `"legend": {
+  label: "Legend"
+  near: bottom-left
+  style.stroke-dash: 2
+  style.fill: transparent
+  *.style.font-size: 12
+` + strings.Join(entries, "") + "}\n"
+}
+
+const (
+	legendBindsByDefault = `  "default:from": "WorkspaceType"
+  "default:to": "APIExport"
+  "default:from" -> "default:to": "binds by default" {style.stroke: "#1971c2"}
+`
+	legendBindsThroughExtend = `  "extend:from": "WorkspaceType"
+  "extend:to": "APIExport"
+  "extend:from" -> "extend:to": "binds through extend" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+`
+	legendBindsByAPIBinding = `  "apibinding:from": "APIBinding file"
+  "apibinding:to": "APIExport"
+  "apibinding:from" -> "apibinding:to": "binds" {style.stroke: "#2f9e44"}
+`
+	legendBindsRefused = `  "refused:from": "use case"
+  "refused:to": "APIExport"
+  "refused:from" -> "refused:to": "conflicts" {style.stroke: "#e03131"; style.stroke-width: 3}
+`
+	legendShared = `  "shared": "APIExport with a resource another export also serves" {style.fill: "#f08c00"}
+`
+	legendClaims = `  "claims:from": "APIExport"
+  "claims:to": "claimed kind"
+  "claims:from" -> "claims:to": "claims" {style.stroke: "#7048e8"; style.stroke-dash: 4}
+`
+)
+
+func withClaims(e pie.Export, claims ...pie.Claim) pie.Export {
+	e.Claims = claims
+	return e
+}
+
 func widgetResource() pie.Resource {
 	return pie.Resource{Group: "core.example.io", Name: "widgets", Schema: "v1.widgets.core.example.io"}
+}
+
+func gadgetResource() pie.Resource {
+	return pie.Resource{Group: "core.example.io", Name: "gadgets", Schema: "v1.gadgets.core.example.io"}
 }
 
 func widgetSchemaKindAt(path, kind string) pie.Schema {
@@ -774,6 +1375,25 @@ func workspaceType(name string, binds []tenancyv1alpha1.APIExportReference, exte
 		Spec: tenancyv1alpha1.WorkspaceTypeSpec{
 			DefaultAPIBindings: binds,
 			Extend:             tenancyv1alpha1.WorkspaceTypeExtension{With: extends},
+		},
+	}
+}
+
+func apiBindingV1alpha1(export string) *apisv1alpha1.APIBinding {
+	return &apisv1alpha1.APIBinding{
+		TypeMeta:   metav1.TypeMeta{APIVersion: apisv1alpha1.SchemeGroupVersion.String(), Kind: "APIBinding"},
+		ObjectMeta: metav1.ObjectMeta{Name: export},
+		Spec: apisv1alpha1.APIBindingSpec{
+			Reference: apisv1alpha1.BindingReference{
+				Export: &apisv1alpha1.ExportBindingReference{Name: export, Path: "root:providers"},
+			},
+			PermissionClaims: []apisv1alpha1.AcceptablePermissionClaim{{
+				PermissionClaim: apisv1alpha1.PermissionClaim{
+					GroupResource: apisv1alpha1.GroupResource{Group: "tenancy.kcp.io", Resource: "workspaces"},
+					All:           true,
+				},
+				State: apisv1alpha1.ClaimAccepted,
+			}},
 		},
 	}
 }

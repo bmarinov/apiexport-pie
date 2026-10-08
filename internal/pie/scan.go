@@ -21,10 +21,12 @@ import (
 )
 
 var (
-	apiExportKind         = apisv1alpha2.SchemeGroupVersion.WithKind("APIExport")
-	apiExportV1alpha1Kind = apisv1alpha1.SchemeGroupVersion.WithKind("APIExport")
-	apiResourceSchemaKind = apisv1alpha1.SchemeGroupVersion.WithKind("APIResourceSchema")
-	workspaceTypeKind     = tenancyv1alpha1.SchemeGroupVersion.WithKind("WorkspaceType")
+	apiExportKind          = apisv1alpha2.SchemeGroupVersion.WithKind("APIExport")
+	apiExportV1alpha1Kind  = apisv1alpha1.SchemeGroupVersion.WithKind("APIExport")
+	apiResourceSchemaKind  = apisv1alpha1.SchemeGroupVersion.WithKind("APIResourceSchema")
+	workspaceTypeKind      = tenancyv1alpha1.SchemeGroupVersion.WithKind("WorkspaceType")
+	apiBindingKind         = apisv1alpha2.SchemeGroupVersion.WithKind("APIBinding")
+	apiBindingV1alpha1Kind = apisv1alpha1.SchemeGroupVersion.WithKind("APIBinding")
 )
 
 // templateAction matches one Go template action: "{{", anything that is not "}}", then "}}".
@@ -130,6 +132,22 @@ func (s *scan) addDocument(name string, n int, doc []byte) {
 		if s.decode(name, n, kind, doc, &wt) {
 			s.model.WorkspaceTypes = append(s.model.WorkspaceTypes, workspaceTypeFrom(name, n, wt))
 		}
+	case apiBindingKind:
+		var binding apisv1alpha2.APIBinding
+		if s.decode(name, n, kind, doc, &binding) {
+			s.addBinding(name, n, binding)
+		}
+	case apiBindingV1alpha1Kind:
+		var old apisv1alpha1.APIBinding
+		if !s.decode(name, n, kind, doc, &old) {
+			return
+		}
+		var binding apisv1alpha2.APIBinding
+		if err := apisv1alpha2.Convert_v1alpha1_APIBinding_To_v1alpha2_APIBinding(&old, &binding, nil); err != nil {
+			s.report(Warning, name, n, fmt.Sprintf("APIBinding does not convert to v1alpha2: %v", err))
+			return
+		}
+		s.addBinding(name, n, binding)
 	default:
 		reason := describe(apiVersion, kind) + " is not drawn"
 		if metaErr != nil {
@@ -176,6 +194,20 @@ func (s *scan) decode(name string, n int, kind string, doc []byte, obj metav1.Ob
 	return true
 }
 
+func (s *scan) addBinding(name string, n int, binding apisv1alpha2.APIBinding) {
+	export := binding.Spec.Reference.Export
+	if export == nil {
+		s.report(Warning, name, n, "APIBinding names no export")
+		return
+	}
+	s.model.APIBindings = append(s.model.APIBindings, APIBinding{
+		Path:   name,
+		Doc:    n,
+		Name:   binding.Name,
+		Export: ExportRef{Path: export.Path, Name: export.Name},
+	})
+}
+
 func (s *scan) report(level Level, name string, n int, reason string) {
 	s.diags = append(s.diags, Diagnostic{Level: level, Path: name, Doc: n, Reason: reason})
 }
@@ -184,6 +216,9 @@ func exportFrom(file string, doc int, export apisv1alpha2.APIExport) Export {
 	e := Export{Path: file, Doc: doc, Name: export.Name}
 	for _, r := range export.Spec.Resources {
 		e.Resources = append(e.Resources, Resource{Group: r.Group, Name: r.Name, Schema: r.Schema})
+	}
+	for _, c := range export.Spec.PermissionClaims {
+		e.Claims = append(e.Claims, Claim{Group: c.Group, Resource: c.Resource, Verbs: c.Verbs})
 	}
 	return e
 }
