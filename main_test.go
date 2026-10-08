@@ -54,7 +54,7 @@ metadata:
 spec: not-a-map
 `
 
-const usageLine = "usage: apiexport-pie [-v] DIR"
+const usageLine = "usage: apiexport-pie [-v] [-o FILE [--watch]] DIR"
 
 func TestRun(t *testing.T) {
 	t.Run("prints the diagram of the manifests in DIR and nothing on stderr", func(t *testing.T) {
@@ -124,6 +124,7 @@ func TestRun(t *testing.T) {
 		{name: "without DIR", args: nil},
 		{name: "with more than one DIR", args: []string{"a", "b"}},
 		{name: "with an unknown flag", args: []string{"-x", "a"}},
+		{name: "with --watch but no -o", args: []string{"--watch", "a"}},
 	}
 	for _, tt := range usageErrors {
 		t.Run("prints usage and exits 2 "+tt.name, func(t *testing.T) {
@@ -136,6 +137,44 @@ func TestRun(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("with -o writes the diagram to FILE and nothing to stdout", func(t *testing.T) {
+		dir := writeTree(t, map[string]string{"ws/export.yaml": exportManifest})
+		file := filepath.Join(t.TempDir(), "pie.d2")
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"-o", file, dir}, &stdout, &stderr)
+
+		written, err := os.ReadFile(file)
+		if code != 0 || err != nil || !strings.Contains(string(written), `"apiexport:ws/export.yaml#1"`) || stdout.Len() != 0 {
+			t.Errorf("run() = %d, file %q (%v), stdout %q, stderr %q; want 0, the diagram in the file, empty stdout",
+				code, written, err, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("exits 1 when -o names a directory that does not exist", func(t *testing.T) {
+		dir := writeTree(t, map[string]string{"ws/export.yaml": exportManifest})
+		file := filepath.Join(t.TempDir(), "missing", "pie.d2")
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"-o", file, dir}, &stdout, &stderr)
+
+		if code != 1 || !strings.Contains(stderr.String(), file) {
+			t.Errorf("run() = %d\nstderr:\n%s\nwant 1 and an error naming %s", code, stderr.String(), file)
+		}
+	})
+
+	t.Run("with --watch exits 1 explaining that d2 is needed when it is not on PATH", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		dir := writeTree(t, map[string]string{"ws/export.yaml": exportManifest})
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"-o", filepath.Join(t.TempDir(), "pie.d2"), "--watch", dir}, &stdout, &stderr)
+
+		if code != 1 || !strings.Contains(stderr.String(), "--watch needs d2 on PATH") {
+			t.Errorf("run() = %d\nstderr:\n%s\nwant 1 and an explanation", code, stderr.String())
+		}
+	})
 
 	t.Run("exits 1 naming DIR when it cannot be read", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "missing")

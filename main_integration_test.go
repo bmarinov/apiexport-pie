@@ -4,10 +4,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // smokeDirsEnv lists real manifest trees to check, separated like PATH. Kept out of the repo so the
@@ -46,6 +51,69 @@ func TestRealTreesDrawWithoutWarnings(t *testing.T) {
 			}
 			renderWithD2(t, stdout.Bytes())
 		})
+	}
+}
+
+func TestWatchKeepsTheDiagramInStepWithTheManifests(t *testing.T) {
+	t.Setenv("BROWSER", "0")
+	dir := writeTree(t, map[string]string{"ws/export.yaml": exportManifest})
+	out := t.TempDir()
+	file, svg := filepath.Join(out, "pie.d2"), filepath.Join(out, "pie.svg")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stderr := &lockedBuffer{}
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, []string{"-o", file, "--watch", dir}, io.Discard, stderr) }()
+
+	waitUntil(t, "d2 to render the first diagram", func() bool { return fileContains(svg, "core.example.io") })
+	other := strings.ReplaceAll(exportManifest, "core.example.io", "other.example.io")
+	if err := os.WriteFile(filepath.Join(dir, "ws", "other.yaml"), []byte(other), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the edit to reach the diagram", func() bool { return fileContains(file, "other.example.io") })
+	waitUntil(t, "d2 to render the edit", func() bool { return fileContains(svg, "other.example.io") })
+
+	cancel()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("run() = %d after interrupt, want 0\nstderr:\n%s", code, stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("run did not stop after interrupt\nstderr:\n%s", stderr.String())
+	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func fileContains(file, s string) bool {
+	data, err := os.ReadFile(file)
+	return err == nil && bytes.Contains(data, []byte(s))
+}
+
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

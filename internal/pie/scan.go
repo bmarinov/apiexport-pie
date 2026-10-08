@@ -13,6 +13,7 @@ import (
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
+	tenancyv1alpha1 "github.com/kcp-dev/sdk/apis/tenancy/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
@@ -23,6 +24,7 @@ var (
 	apiExportKind         = apisv1alpha2.SchemeGroupVersion.WithKind("APIExport")
 	apiExportV1alpha1Kind = apisv1alpha1.SchemeGroupVersion.WithKind("APIExport")
 	apiResourceSchemaKind = apisv1alpha1.SchemeGroupVersion.WithKind("APIResourceSchema")
+	workspaceTypeKind     = tenancyv1alpha1.SchemeGroupVersion.WithKind("WorkspaceType")
 )
 
 // templateAction matches one Go template action: "{{", anything that is not "}}", then "}}".
@@ -123,6 +125,11 @@ func (s *scan) addDocument(name string, n int, doc []byte) {
 				Plural: ars.Spec.Names.Plural,
 			})
 		}
+	case workspaceTypeKind:
+		var wt tenancyv1alpha1.WorkspaceType
+		if s.decode(name, n, kind, doc, &wt) {
+			s.model.WorkspaceTypes = append(s.model.WorkspaceTypes, workspaceTypeFrom(name, n, wt))
+		}
 	default:
 		reason := describe(apiVersion, kind) + " is not drawn"
 		if metaErr != nil {
@@ -179,4 +186,15 @@ func exportFrom(file string, doc int, export apisv1alpha2.APIExport) Export {
 		e.Resources = append(e.Resources, Resource{Group: r.Group, Name: r.Name, Schema: r.Schema})
 	}
 	return e
+}
+
+func workspaceTypeFrom(file string, doc int, wt tenancyv1alpha1.WorkspaceType) WorkspaceType {
+	t := WorkspaceType{Path: file, Doc: doc, Name: wt.Name}
+	for _, ref := range wt.Spec.DefaultAPIBindings {
+		t.Binds = append(t.Binds, ExportRef{Path: ref.Path, Name: ref.Export})
+	}
+	for _, ref := range wt.Spec.Extend.With {
+		t.Extends = append(t.Extends, TypeRef{Path: ref.Path, Name: string(ref.Name)})
+	}
+	return t
 }

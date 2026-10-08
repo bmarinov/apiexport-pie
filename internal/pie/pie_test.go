@@ -11,6 +11,7 @@ import (
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
+	tenancyv1alpha1 "github.com/kcp-dev/sdk/apis/tenancy/v1alpha1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
@@ -109,6 +110,19 @@ func TestScan(t *testing.T) {
 			},
 			want:      pie.Model{},
 			wantDiags: []string{"skipped binding.yaml#1", "skipped configmap.yaml#1", "skipped foreign.yaml#1"},
+		},
+		{
+			name: "finds WorkspaceTypes with the exports they bind and the types they extend",
+			fsys: fstest.MapFS{
+				"types.yaml": manifest(t, workspaceType("account",
+					[]tenancyv1alpha1.APIExportReference{{Export: "core.example.io", Path: "root:providers"}, {Export: "local.example.io"}},
+					[]tenancyv1alpha1.WorkspaceTypeReference{{Name: "security", Path: "root"}})),
+			},
+			want: pie.Model{WorkspaceTypes: []pie.WorkspaceType{{
+				Path: "types.yaml", Doc: 1, Name: "account",
+				Binds:   []pie.ExportRef{{Path: "root:providers", Name: "core.example.io"}, {Path: "", Name: "local.example.io"}},
+				Extends: []pie.TypeRef{{Path: "root", Name: "security"}},
+			}}},
 		},
 		{
 			name: "ignores files without a YAML extension",
@@ -513,6 +527,184 @@ func TestRenderD2(t *testing.T) {
 	}
 }
 
+func TestRenderD2DrawsUseCases(t *testing.T) {
+	coreHere := pie.Export{Path: "pms/export.yaml", Doc: 1, Name: "core.example.io"}
+	coreTable := `"apiexport:pms/export.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io"
+}
+`
+	tests := []struct {
+		name  string
+		model pie.Model
+		want  string
+	}{
+		{
+			name: "a WorkspaceType lists the exports it binds, where they live, and points at them",
+			model: pie.Model{
+				Exports: []pie.Export{coreHere},
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account",
+					Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}}},
+			},
+			want: `"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account"
+  "core.example.io": "root:pms"
+}
+` + coreTable + `"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1"
+`,
+		},
+		{
+			name: "an export outside the tree is drawn once, as a dashed box, and an empty path is the type's own workspace",
+			model: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{
+					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{
+						{Path: "root", Name: "tenancy.kcp.io"}, {Path: "", Name: "local.example.io"},
+					}},
+					{Path: "types/org.yaml", Doc: 1, Name: "org", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}}},
+				},
+			},
+			want: `"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account"
+  "tenancy.kcp.io": "root"
+  "local.example.io": "(own workspace)"
+}
+"workspacetype:types/org.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType org"
+  "tenancy.kcp.io": "root"
+}
+"outside": {
+  label: "APIExports outside the tree"
+  style.stroke-dash: 3
+  "tenancy.kcp.io @ root"
+  "local.example.io @ (own workspace)"
+}
+"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root"
+"workspacetype:types/account.yaml#1"."local.example.io" -> "outside"."local.example.io @ (own workspace)"
+"workspacetype:types/org.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root"
+`,
+		},
+		{
+			name: "bindings inherited through extend are listed once, after the type's own, naming the type that declares them",
+			model: pie.Model{
+				Exports: []pie.Export{coreHere},
+				WorkspaceTypes: []pie.WorkspaceType{
+					{Path: "types/account.yaml", Doc: 1, Name: "account",
+						Binds:   []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}},
+						Extends: []pie.TypeRef{{Path: "root", Name: "security"}, {Path: "root", Name: "universal"}}},
+					{Path: "types/security.yaml", Doc: 1, Name: "security",
+						Binds:   []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}, {Path: "root:audit", Name: "audit.example.io"}},
+						Extends: []pie.TypeRef{{Path: "root", Name: "base"}}},
+					{Path: "types/base.yaml", Doc: 1, Name: "base",
+						Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}}},
+				},
+			},
+			want: `"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account · extends security, universal (not in tree)"
+  "core.example.io": "root:pms"
+  "audit.example.io": "root:audit · via security"
+  "tenancy.kcp.io": "root · via base"
+}
+"workspacetype:types/security.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType security · extends base"
+  "core.example.io": "root:pms"
+  "audit.example.io": "root:audit"
+  "tenancy.kcp.io": "root · via base"
+}
+"workspacetype:types/base.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType base"
+  "tenancy.kcp.io": "root"
+}
+` + coreTable + `"outside": {
+  label: "APIExports outside the tree"
+  style.stroke-dash: 3
+  "audit.example.io @ root:audit"
+  "tenancy.kcp.io @ root"
+}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1"
+"workspacetype:types/account.yaml#1"."audit.example.io" -> "outside"."audit.example.io @ root:audit"
+"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root"
+"workspacetype:types/security.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1"
+"workspacetype:types/security.yaml#1"."audit.example.io" -> "outside"."audit.example.io @ root:audit"
+"workspacetype:types/security.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root"
+"workspacetype:types/base.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root"
+`,
+		},
+		{
+			name: "types that extend each other stop where they started",
+			model: pie.Model{WorkspaceTypes: []pie.WorkspaceType{
+				{Path: "types/a.yaml", Doc: 1, Name: "a", Binds: []pie.ExportRef{{Path: "root", Name: "a.example.io"}}, Extends: []pie.TypeRef{{Name: "b"}}},
+				{Path: "types/b.yaml", Doc: 1, Name: "b", Binds: []pie.ExportRef{{Path: "root", Name: "b.example.io"}}, Extends: []pie.TypeRef{{Name: "a"}}},
+			}},
+			want: `"workspacetype:types/a.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType a · extends b"
+  "a.example.io": "root"
+  "b.example.io": "root · via b"
+}
+"workspacetype:types/b.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType b · extends a"
+  "b.example.io": "root"
+  "a.example.io": "root · via a"
+}
+"outside": {
+  label: "APIExports outside the tree"
+  style.stroke-dash: 3
+  "a.example.io @ root"
+  "b.example.io @ root"
+}
+"workspacetype:types/a.yaml#1"."a.example.io" -> "outside"."a.example.io @ root"
+"workspacetype:types/a.yaml#1"."b.example.io" -> "outside"."b.example.io @ root"
+"workspacetype:types/b.yaml#1"."b.example.io" -> "outside"."b.example.io @ root"
+"workspacetype:types/b.yaml#1"."a.example.io" -> "outside"."a.example.io @ root"
+`,
+		},
+		{
+			name: "a binding points at every export of that name in the tree, and repeated type names show their document",
+			model: pie.Model{
+				Exports: []pie.Export{coreHere, {Path: "test/export.yaml", Doc: 1, Name: "core.example.io"}},
+				WorkspaceTypes: []pie.WorkspaceType{
+					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}},
+					{Path: "test/account.yaml", Doc: 1, Name: "account"},
+				},
+			},
+			want: `"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account · types/account.yaml#1"
+  "core.example.io": "root:pms"
+}
+"workspacetype:test/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account · test/account.yaml#1"
+}
+"apiexport:pms/export.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io · pms/export.yaml#1"
+}
+"apiexport:test/export.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io · test/export.yaml#1"
+}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1"
+"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:test/export.yaml#1"
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderD2(tt.model)); got != tt.want {
+				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
 func widgetResource() pie.Resource {
 	return pie.Resource{Group: "core.example.io", Name: "widgets", Schema: "v1.widgets.core.example.io"}
 }
@@ -571,6 +763,17 @@ func apiResourceSchema(kind, plural, group string) *apisv1alpha1.APIResourceSche
 			Group: group,
 			Names: apiextensionsv1.CustomResourceDefinitionNames{Plural: plural, Kind: kind},
 			Scope: apiextensionsv1.ClusterScoped,
+		},
+	}
+}
+
+func workspaceType(name string, binds []tenancyv1alpha1.APIExportReference, extends []tenancyv1alpha1.WorkspaceTypeReference) *tenancyv1alpha1.WorkspaceType {
+	return &tenancyv1alpha1.WorkspaceType{
+		TypeMeta:   metav1.TypeMeta{APIVersion: tenancyv1alpha1.SchemeGroupVersion.String(), Kind: "WorkspaceType"},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: tenancyv1alpha1.WorkspaceTypeSpec{
+			DefaultAPIBindings: binds,
+			Extend:             tenancyv1alpha1.WorkspaceTypeExtension{With: extends},
 		},
 	}
 }
