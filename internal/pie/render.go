@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+// elkLayout makes ELK the layout engine of the file itself, so every way of rendering it, d2 --watch
+// included, routes edges between use cases and exports at right angles. D2_LAYOUT and --layout
+// still win.
+const elkLayout = "vars: {\n  d2-config: {\n    layout-engine: elk\n  }\n}\n"
+
 // outsideID is the box holding exports that use cases bind but the tree does not define.
 const outsideID = "outside"
 
@@ -43,9 +48,19 @@ var relations = []relation{bindsByDefault, bindsThroughExtend, bindsByAPIBinding
 // export, and a legend of the relations and colours drawn.
 func RenderD2(m Model) []byte {
 	var b bytes.Buffer
+	b.WriteString(elkLayout)
 	var edges, outside []string
 	drawn := map[relation]bool{}
 	sharedDrawn := false
+
+	paths := exportPaths(m)
+	// key is an export's d2 key: inside the box of its workspace when the references to it agree.
+	key := func(e Export) string {
+		if p := paths[e.Name]; len(p) == 1 {
+			return fmt.Sprintf("%q.%q", workspaceID(p[0]), exportID(e))
+		}
+		return fmt.Sprintf("%q", exportID(e))
+	}
 
 	edge := func(r relation, line string) {
 		drawn[r] = true
@@ -57,7 +72,7 @@ func RenderD2(m Model) []byte {
 	link := func(r relation, from string, ref ExportRef) {
 		targets := exportsNamed(ref.Name, m.Exports)
 		for _, e := range targets {
-			edge(r, fmt.Sprintf("%q.%q -> %q", from, ref.Name, exportID(e)))
+			edge(r, fmt.Sprintf("%q.%q -> %s", from, ref.Name, key(e)))
 		}
 		if len(targets) == 0 {
 			box := ref.Name + " @ " + workspaceOf(ref)
@@ -68,7 +83,7 @@ func RenderD2(m Model) []byte {
 		}
 	}
 
-	resources := resourcesByExport(m.Exports)
+	resources := servedByExport(m.Exports, m.Schemas)
 
 	// useCase draws the table of exports a use case binds. Bindings kcp refuses together turn the
 	// table red, and their rows say what they conflict with.
@@ -80,7 +95,13 @@ func RenderD2(m Model) []byte {
 		}
 		for _, bd := range bound {
 			where, r := bd.where(), bd.relation
-			if with, ok := conflicts[bd.ref.Name]; ok {
+			var with []string
+			for _, c := range conflicts {
+				if c.export == bd.ref.Name {
+					with = append(with, c.String())
+				}
+			}
+			if len(with) > 0 {
 				where += " · conflicts with " + strings.Join(with, ", ")
 				r = bindsRefused
 			}
@@ -92,10 +113,20 @@ func RenderD2(m Model) []byte {
 
 	typesNamed := countNames(m.WorkspaceTypes, func(t WorkspaceType) string { return t.Name })
 	for _, t := range m.WorkspaceTypes {
-		useCase("workspacetype:"+location(t.Path, t.Doc), typeLabel(t, typesNamed[t.Name] > 1, m.WorkspaceTypes), bindingsOf(t, m.WorkspaceTypes))
+		useCase("workspacetype:"+location(t.Path, t.Doc), typeLabel(t, typesNamed[t.Name] > 1, m.WorkspaceTypes, m.Workspaces), bindingsOf(t, m.WorkspaceTypes))
 	}
 	for _, dir := range bindingsByDir(m.APIBindings) {
 		useCase("apibindings:"+dir.dir, "APIBindings in "+dir.dir, dir.bound)
+	}
+
+	var workspaces []string
+	for _, e := range m.Exports {
+		if p := paths[e.Name]; len(p) == 1 && !slices.Contains(workspaces, p[0]) {
+			workspaces = append(workspaces, p[0])
+		}
+	}
+	for _, ws := range workspaces {
+		fmt.Fprintf(&b, "%q: {\n  label: %q\n}\n", workspaceID(ws), "Workspace "+ws)
 	}
 
 	exportsCalled := countNames(m.Exports, func(e Export) string { return e.Name })
@@ -111,8 +142,11 @@ func RenderD2(m Model) []byte {
 		} else if n > 1 {
 			label += fmt.Sprintf(" · %d claims", n)
 		}
+		if p := paths[e.Name]; len(p) > 1 {
+			label += " · references disagree: " + strings.Join(p, ", ")
+		}
 		rows[i] = rowsOf(e, m.Schemas, serving)
-		fmt.Fprintf(&b, "%q: {\n  shape: sql_table\n  label: %q\n", exportID(e), label)
+		fmt.Fprintf(&b, "%s: {\n  shape: sql_table\n  label: %q\n", key(e), label)
 		if slices.ContainsFunc(rows[i], func(r row) bool { return r.shared }) {
 			fmt.Fprintf(&b, "  style.fill: %q\n", sharedFill)
 			sharedDrawn = true
@@ -131,8 +165,8 @@ func RenderD2(m Model) []byte {
 			for i, target := range m.Exports {
 				for _, r := range rows[i] {
 					if r.resource == claimed {
-						edge(claimsKind, fmt.Sprintf("%q -> %q.%q: %q",
-							exportID(e), exportID(target), r.kind, "claims "+strings.Join(c.Verbs, ", ")))
+						edge(claimsKind, fmt.Sprintf("%s -> %s.%q: %q",
+							key(e), key(target), r.kind, "claims "+strings.Join(c.Verbs, ", ")))
 					}
 				}
 			}
@@ -178,6 +212,29 @@ func RenderD2(m Model) []byte {
 
 func exportID(e Export) string { return "apiexport:" + location(e.Path, e.Doc) }
 
+func workspaceID(path string) string { return "workspace:" + path }
+
+// exportPaths lists, by export name, the workspace paths WorkspaceTypes and APIBinding files bind
+// it from. An empty path names the referring object's own workspace, which the tree does not tell,
+// so it says nothing about where the export lives.
+func exportPaths(m Model) map[string][]string {
+	paths := map[string][]string{}
+	add := func(ref ExportRef) {
+		if ref.Path != "" && !slices.Contains(paths[ref.Name], ref.Path) {
+			paths[ref.Name] = append(paths[ref.Name], ref.Path)
+		}
+	}
+	for _, t := range m.WorkspaceTypes {
+		for _, ref := range t.Binds {
+			add(ref)
+		}
+	}
+	for _, binding := range m.APIBindings {
+		add(binding.Export)
+	}
+	return paths
+}
+
 func countNames[T any](items []T, name func(T) string) map[string]int {
 	counts := map[string]int{}
 	for _, item := range items {
@@ -186,23 +243,36 @@ func countNames[T any](items []T, name func(T) string) map[string]int {
 	return counts
 }
 
-func typeLabel(t WorkspaceType, repeated bool, types []WorkspaceType) string {
+// typeLabel names a WorkspaceType, the types it extends, and the workspaces in the tree of its type,
+// which are how readers know a use case: root:orgs is the orgs workspace, of type orgs.
+func typeLabel(t WorkspaceType, repeated bool, types []WorkspaceType, workspaces []Workspace) string {
 	label := "WorkspaceType " + t.Name
 	if repeated {
 		label += " · " + location(t.Path, t.Doc)
 	}
-	if len(t.Extends) == 0 {
-		return label
-	}
-	bases := make([]string, 0, len(t.Extends))
-	for _, base := range t.Extends {
-		name := base.Name
-		if _, ok := typeNamed(base.Name, types); !ok {
-			name += " (not in tree)"
+	if len(t.Extends) > 0 {
+		bases := make([]string, 0, len(t.Extends))
+		for _, base := range t.Extends {
+			name := base.Name
+			if _, ok := typeNamed(base.Name, types); !ok {
+				name += " (not in tree)"
+			}
+			bases = append(bases, name)
 		}
-		bases = append(bases, name)
+		label += " · extends " + strings.Join(bases, ", ")
 	}
-	return label + " · extends " + strings.Join(bases, ", ")
+	var named []string
+	for _, w := range workspaces {
+		if w.Type.Name == t.Name {
+			named = append(named, w.Name)
+		}
+	}
+	if len(named) == 1 {
+		label += " · workspace " + named[0]
+	} else if len(named) > 1 {
+		label += " · workspaces " + strings.Join(named, ", ")
+	}
+	return label
 }
 
 // bindingDir is a directory of APIBinding files and the exports they bind, each once.
@@ -313,7 +383,11 @@ func rowsOf(e Export, schemas []Schema, serving map[string][]string) []row {
 	rows := make([]row, 0, len(e.Resources))
 	rowsOfKind := map[string]int{}
 	for _, r := range e.Resources {
-		kind, found := kindOf(r, path.Dir(e.Path), schemas)
+		kind := r.Name
+		s, found := schemaOf(r, path.Dir(e.Path), schemas)
+		if found {
+			kind = s.Kind
+		}
 		rowsOfKind[kind]++
 		version, _, _ := strings.Cut(r.Schema, ".")
 		// d2 drops styles on single table rows, so a missing schema is marked in words.
@@ -339,11 +413,10 @@ func rowsOf(e Export, schemas []Schema, serving map[string][]string) []row {
 	return rows
 }
 
-// kindOf names a resource by the kind its schema defines, and says whether the schema was found.
-// kcp requires an export and its schemas to share a workspace, so the schema in the export's own
-// directory wins; otherwise the first schema of that name in the tree. Without one, the plural
-// stands in.
-func kindOf(r Resource, dir string, schemas []Schema) (string, bool) {
+// schemaOf finds the schema a resource is served from. kcp requires an export and its schemas to
+// share a workspace, so the schema in the export's own directory wins; otherwise the first schema of
+// that name in the tree.
+func schemaOf(r Resource, dir string, schemas []Schema) (Schema, bool) {
 	var elsewhere *Schema
 	for i := range schemas {
 		s := &schemas[i]
@@ -351,16 +424,16 @@ func kindOf(r Resource, dir string, schemas []Schema) (string, bool) {
 			continue
 		}
 		if path.Dir(s.Path) == dir {
-			return s.Kind, true
+			return *s, true
 		}
 		if elsewhere == nil {
 			elsewhere = s
 		}
 	}
 	if elsewhere == nil {
-		return r.Name, false
+		return Schema{}, false
 	}
-	return elsewhere.Kind, true
+	return *elsewhere, true
 }
 
 // exportsServing names the exports serving each resource, in the order they appear. Copies of an
@@ -378,34 +451,100 @@ func exportsServing(exports []Export) map[string][]string {
 	return serving
 }
 
-// resourcesByExport lists the resources each export serves, copies of an export together.
-func resourcesByExport(exports []Export) map[string][]string {
-	served := map[string][]string{}
-	for _, e := range exports {
-		for _, r := range e.Resources {
-			if name := resourceName(r); !slices.Contains(served[e.Name], name) {
-				served[e.Name] = append(served[e.Name], name)
-			}
-		}
-	}
-	return served
+// served is a resource an export serves, with the names kcp tells the resources of a group apart by:
+// plural, singular and short names in names, kind and list kind in kinds. Without its schema in the
+// tree, only the plural is known.
+type served struct {
+	group, resource string
+	names, kinds    []string
 }
 
-// conflictsAmong finds the bindings of one use case that kcp refuses together: exports with
-// different names serving the same resource, which a workspace can hold from one binding only. It
-// maps each such export to what it conflicts with. Exports outside the tree serve nothing known.
-func conflictsAmong(bound []binding, resources map[string][]string) map[string][]string {
-	conflicts := map[string][]string{}
+// servedByExport lists the resources each export serves, copies of an export together.
+func servedByExport(exports []Export, schemas []Schema) map[string][]served {
+	byExport := map[string][]served{}
+	for _, e := range exports {
+		for _, r := range e.Resources {
+			name := resourceName(r)
+			if slices.ContainsFunc(byExport[e.Name], func(s served) bool { return s.resource == name }) {
+				continue
+			}
+			sv := served{group: r.Group, resource: name, names: []string{r.Name}}
+			if s, ok := schemaOf(r, path.Dir(e.Path), schemas); ok {
+				sv.names = append(append(sv.names, s.Singular), s.ShortNames...)
+				sv.kinds = []string{s.Kind, s.ListKind}
+			}
+			byExport[e.Name] = append(byExport[e.Name], sv)
+		}
+	}
+	return byExport
+}
+
+// conflict is a resource of one bound export that kcp refuses next to a resource of another.
+type conflict struct {
+	export, other string
+	mine, theirs  string
+	// on is the name both resources use, empty when they are the same resource.
+	on string
+}
+
+// String tells the conflict from the export's side, as its row does.
+func (c conflict) String() string {
+	if c.on == "" {
+		return c.other + " on " + c.mine
+	}
+	return c.other + " on " + c.mine + " (both use " + c.on + ")"
+}
+
+// conflictsAmong finds the bindings of one use case that kcp refuses together, from the side of
+// each export. Exports outside the tree serve nothing known.
+func conflictsAmong(bound []binding, resources map[string][]served) []conflict {
+	var conflicts []conflict
 	for _, bd := range bound {
-		for _, res := range resources[bd.ref.Name] {
+		for _, mine := range resources[bd.ref.Name] {
 			for _, other := range bound {
-				if other.ref.Name != bd.ref.Name && slices.Contains(resources[other.ref.Name], res) {
-					conflicts[bd.ref.Name] = append(conflicts[bd.ref.Name], other.ref.Name+" on "+res)
+				if other.ref.Name == bd.ref.Name {
+					continue
+				}
+				if theirs, on, ok := firstClash(mine, resources[other.ref.Name]); ok {
+					conflicts = append(conflicts, conflict{export: bd.ref.Name, other: other.ref.Name, mine: mine.resource, theirs: theirs, on: on})
 				}
 			}
 		}
 	}
 	return conflicts
+}
+
+func firstClash(mine served, theirs []served) (string, string, bool) {
+	for _, t := range theirs {
+		if on, ok := clash(mine, t); ok {
+			return t.resource, on, true
+		}
+	}
+	return "", "", false
+}
+
+// clash says whether kcp refuses two resources in one workspace, and on which name. Within a group,
+// plurals, singulars and short names must all differ, and so must kinds and list kinds; names are
+// never compared with kinds (namesConflict, pkg/reconciler/apis/apibinding/conflict_checker.go,
+// kcp v0.32.3). The name is empty when both are the same resource.
+func clash(a, b served) (string, bool) {
+	if a.group != b.group {
+		return "", false
+	}
+	if a.resource == b.resource {
+		return "", true
+	}
+	for _, n := range a.names {
+		if n != "" && slices.Contains(b.names, n) {
+			return n, true
+		}
+	}
+	for _, k := range a.kinds {
+		if k != "" && slices.Contains(b.kinds, k) {
+			return k, true
+		}
+	}
+	return "", false
 }
 
 func resourceName(r Resource) string {

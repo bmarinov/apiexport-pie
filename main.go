@@ -61,6 +61,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", dir, err)
 		}
+		diags = append(diags, pie.Check(model)...)
 		var notes []string
 		for _, d := range diags {
 			if d.Level == pie.Warning || *verbose {

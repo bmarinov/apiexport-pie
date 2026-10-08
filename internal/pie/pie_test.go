@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -57,6 +58,27 @@ func TestScan(t *testing.T) {
 				Exports: []pie.Export{coreExportAt("export.yaml")},
 				Schemas: []pie.Schema{gadgetSchemaAt("gadgets.yaml"), widgetSchemaAt("widgets.yaml")},
 			},
+		},
+		{
+			name: "keeps the names kcp tells the resources of a group apart by",
+			fsys: fstest.MapFS{
+				"widgets.yaml": manifest(t, withNames(apiResourceSchema("Widget", "widgets", "core.example.io"), "widget", "WidgetList", "wd", "wdg")),
+			},
+			want: pie.Model{Schemas: []pie.Schema{{
+				Path: "widgets.yaml", Name: "v1.widgets.core.example.io", Group: "core.example.io",
+				Kind: "Widget", Plural: "widgets", Singular: "widget", ListKind: "WidgetList", ShortNames: []string{"wd", "wdg"},
+			}}},
+		},
+		{
+			name: "finds Workspaces and the type each is of",
+			fsys: fstest.MapFS{
+				"orgs.yaml":    manifest(t, workspace("orgs", &tenancyv1alpha1.WorkspaceTypeReference{Name: "orgs", Path: "root"})),
+				"untyped.yaml": manifest(t, workspace("plain", nil)),
+			},
+			want: pie.Model{Workspaces: []pie.Workspace{
+				{Path: "orgs.yaml", Doc: 1, Name: "orgs", Type: pie.TypeRef{Path: "root", Name: "orgs"}},
+				{Path: "untyped.yaml", Doc: 1, Name: "plain"},
+			}},
 		},
 		{
 			name: "finds manifests in nested directories with either YAML extension",
@@ -440,6 +462,9 @@ func TestRenderD2(t *testing.T) {
 		want  string
 	}{
 		{
+			name: "starts with the ELK layout, which d2 follows unless D2_LAYOUT or --layout say otherwise",
+		},
+		{
 			name: "draws an export as a table of the kinds it serves",
 			model: pie.Model{
 				Exports: []pie.Export{coreExportAt("ws/export.yaml")},
@@ -664,8 +689,8 @@ func TestRenderD2(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := string(pie.RenderD2(tt.model)); got != tt.want {
-				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, tt.want)
+			if got := string(pie.RenderD2(tt.model)); got != elkLayout+tt.want {
+				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, elkLayout+tt.want)
 			}
 		})
 	}
@@ -673,7 +698,10 @@ func TestRenderD2(t *testing.T) {
 
 func TestRenderD2DrawsUseCases(t *testing.T) {
 	coreHere := pie.Export{Path: "pms/export.yaml", Doc: 1, Name: "core.example.io"}
-	coreTable := `"apiexport:pms/export.yaml#1": {
+	coreTable := `"workspace:root:pms": {
+  label: "Workspace root:pms"
+}
+"workspace:root:pms"."apiexport:pms/export.yaml#1": {
   shape: sql_table
   label: "APIExport core.example.io"
 }
@@ -695,8 +723,32 @@ func TestRenderD2DrawsUseCases(t *testing.T) {
   label: "WorkspaceType account"
   "core.example.io": "root:pms"
 }
-` + coreTable + `"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
+` + coreTable + `"workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
 ` + legend(legendBindsByDefault),
+		},
+		{
+			name: "a WorkspaceType names the workspaces in the tree that are of its type",
+			model: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{
+					{Path: "types/orgs.yaml", Doc: 1, Name: "orgs", Extends: []pie.TypeRef{{Path: "root", Name: "universal"}}},
+					{Path: "types/account.yaml", Doc: 1, Name: "account"},
+				},
+				Workspaces: []pie.Workspace{
+					{Path: "ws/orgs.yaml", Doc: 1, Name: "orgs", Type: pie.TypeRef{Path: "root", Name: "orgs"}},
+					{Path: "ws/a.yaml", Doc: 1, Name: "a", Type: pie.TypeRef{Path: "root", Name: "account"}},
+					{Path: "ws/pms.yaml", Doc: 1, Name: "platform-mesh-system", Type: pie.TypeRef{Path: "root", Name: "universal"}},
+					{Path: "ws/b.yaml", Doc: 1, Name: "b", Type: pie.TypeRef{Path: "root", Name: "account"}},
+				},
+			},
+			want: `"workspacetype:types/orgs.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType orgs · extends universal (not in tree) · workspace orgs"
+}
+"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account · workspaces a, b"
+}
+`,
 		},
 		{
 			name: "an export outside the tree is drawn once, as a dashed box, and an empty path is the type's own workspace",
@@ -770,10 +822,10 @@ func TestRenderD2DrawsUseCases(t *testing.T) {
   "audit.example.io @ root:audit"
   "tenancy.kcp.io @ root"
 }
-"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
 "workspacetype:types/account.yaml#1"."audit.example.io" -> "outside"."audit.example.io @ root:audit" {style.stroke: "#1971c2"; style.stroke-dash: 2}
 "workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"; style.stroke-dash: 2}
-"workspacetype:types/security.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
+"workspacetype:types/security.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
 "workspacetype:types/security.yaml#1"."audit.example.io" -> "outside"."audit.example.io @ root:audit" {style.stroke: "#1971c2"}
 "workspacetype:types/security.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"; style.stroke-dash: 2}
 "workspacetype:types/base.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
@@ -807,7 +859,7 @@ func TestRenderD2DrawsUseCases(t *testing.T) {
   "system.example.io @ (own workspace)"
   "providers.example.io @ root:pms"
 }
-"apibindings:pms"."core.example.io" -> "apiexport:pms/export.yaml#1" {style.stroke: "#2f9e44"}
+"apibindings:pms"."core.example.io" -> "workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#2f9e44"}
 "apibindings:pms"."system.example.io" -> "outside"."system.example.io @ (own workspace)" {style.stroke: "#2f9e44"}
 "apibindings:features/x"."providers.example.io" -> "outside"."providers.example.io @ root:pms" {style.stroke: "#2f9e44"}
 ` + legend(legendBindsByAPIBinding),
@@ -885,23 +937,26 @@ func TestRenderD2DrawsUseCases(t *testing.T) {
   shape: sql_table
   label: "WorkspaceType account · test/account.yaml#1"
 }
-"apiexport:pms/export.yaml#1": {
+"workspace:root:pms": {
+  label: "Workspace root:pms"
+}
+"workspace:root:pms"."apiexport:pms/export.yaml#1": {
   shape: sql_table
   label: "APIExport core.example.io · pms/export.yaml#1"
 }
-"apiexport:test/export.yaml#1": {
+"workspace:root:pms"."apiexport:test/export.yaml#1": {
   shape: sql_table
   label: "APIExport core.example.io · test/export.yaml#1"
 }
-"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
-"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:test/export.yaml#1" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:test/export.yaml#1" {style.stroke: "#1971c2"}
 ` + legend(legendBindsByDefault),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := string(pie.RenderD2(tt.model)); got != tt.want {
-				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, tt.want)
+			if got := string(pie.RenderD2(tt.model)); got != elkLayout+tt.want {
+				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, elkLayout+tt.want)
 			}
 		})
 	}
@@ -1010,8 +1065,8 @@ func TestRenderD2DrawsClaims(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := string(pie.RenderD2(tt.model)); got != tt.want {
-				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, tt.want)
+			if got := string(pie.RenderD2(tt.model)); got != elkLayout+tt.want {
+				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, elkLayout+tt.want)
 			}
 		})
 	}
@@ -1021,13 +1076,16 @@ func TestRenderD2FlagsBindingsKcpRefuses(t *testing.T) {
 	exportOf := func(path, name string, resources ...pie.Resource) pie.Export {
 		return pie.Export{Path: path, Doc: 1, Name: name, Resources: resources}
 	}
-	widgetsInAAndB := `"apiexport:ws/a.yaml#1": {
+	widgetsInAAndB := `"workspace:root:pms": {
+  label: "Workspace root:pms"
+}
+"workspace:root:pms"."apiexport:ws/a.yaml#1": {
   shape: sql_table
   label: "APIExport a.example.io"
   style.fill: "#f08c00"
   "Widget": "widgets.core.example.io" {constraint: "v1 · also in b.example.io"}
 }
-"apiexport:ws/b.yaml#1": {
+"workspace:root:pms"."apiexport:ws/b.yaml#1": {
   shape: sql_table
   label: "APIExport b.example.io"
   style.fill: "#f08c00"
@@ -1060,28 +1118,31 @@ func TestRenderD2FlagsBindingsKcpRefuses(t *testing.T) {
   "b.example.io": "root:pms · conflicts with a.example.io on widgets.core.example.io"
   "c.example.io": "root:pms · conflicts with a.example.io on gadgets.core.example.io"
 }
-"apiexport:ws/a.yaml#1": {
+"workspace:root:pms": {
+  label: "Workspace root:pms"
+}
+"workspace:root:pms"."apiexport:ws/a.yaml#1": {
   shape: sql_table
   label: "APIExport a.example.io"
   style.fill: "#f08c00"
   "Widget": "widgets.core.example.io" {constraint: "v1 · also in b.example.io"}
   "Gadget": "gadgets.core.example.io" {constraint: "v1 · also in c.example.io"}
 }
-"apiexport:ws/b.yaml#1": {
+"workspace:root:pms"."apiexport:ws/b.yaml#1": {
   shape: sql_table
   label: "APIExport b.example.io"
   style.fill: "#f08c00"
   "Widget": "widgets.core.example.io" {constraint: "v1 · also in a.example.io"}
 }
-"apiexport:ws/c.yaml#1": {
+"workspace:root:pms"."apiexport:ws/c.yaml#1": {
   shape: sql_table
   label: "APIExport c.example.io"
   style.fill: "#f08c00"
   "Gadget": "gadgets.core.example.io" {constraint: "v1 · also in a.example.io"}
 }
-"workspacetype:types/account.yaml#1"."a.example.io" -> "apiexport:ws/a.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
-"workspacetype:types/account.yaml#1"."b.example.io" -> "apiexport:ws/b.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
-"workspacetype:types/account.yaml#1"."c.example.io" -> "apiexport:ws/c.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/account.yaml#1"."a.example.io" -> "workspace:root:pms"."apiexport:ws/a.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/account.yaml#1"."b.example.io" -> "workspace:root:pms"."apiexport:ws/b.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/account.yaml#1"."c.example.io" -> "workspace:root:pms"."apiexport:ws/c.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
 ` + legend(legendBindsRefused, legendShared),
 		},
 		{
@@ -1106,9 +1167,9 @@ func TestRenderD2FlagsBindingsKcpRefuses(t *testing.T) {
   label: "WorkspaceType base"
   "b.example.io": "root:pms"
 }
-` + widgetsInAAndB + `"workspacetype:types/account.yaml#1"."a.example.io" -> "apiexport:ws/a.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
-"workspacetype:types/account.yaml#1"."b.example.io" -> "apiexport:ws/b.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
-"workspacetype:types/base.yaml#1"."b.example.io" -> "apiexport:ws/b.yaml#1" {style.stroke: "#1971c2"}
+` + widgetsInAAndB + `"workspacetype:types/account.yaml#1"."a.example.io" -> "workspace:root:pms"."apiexport:ws/a.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/account.yaml#1"."b.example.io" -> "workspace:root:pms"."apiexport:ws/b.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/base.yaml#1"."b.example.io" -> "workspace:root:pms"."apiexport:ws/b.yaml#1" {style.stroke: "#1971c2"}
 ` + legend(legendBindsByDefault, legendBindsRefused, legendShared),
 		},
 		{
@@ -1128,8 +1189,8 @@ func TestRenderD2FlagsBindingsKcpRefuses(t *testing.T) {
   "a.example.io": "root:pms · conflicts with b.example.io on widgets.core.example.io"
   "b.example.io": "root:pms · conflicts with a.example.io on widgets.core.example.io"
 }
-` + widgetsInAAndB + `"apibindings:pms"."a.example.io" -> "apiexport:ws/a.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
-"apibindings:pms"."b.example.io" -> "apiexport:ws/b.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+` + widgetsInAAndB + `"apibindings:pms"."a.example.io" -> "workspace:root:pms"."apiexport:ws/a.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"apibindings:pms"."b.example.io" -> "workspace:root:pms"."apiexport:ws/b.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
 ` + legend(legendBindsRefused, legendShared),
 		},
 		{
@@ -1152,27 +1213,30 @@ func TestRenderD2FlagsBindingsKcpRefuses(t *testing.T) {
   "core.example.io": "root:pms · conflicts with other.example.io on widgets.core.example.io"
   "other.example.io": "root:pms · conflicts with core.example.io on widgets.core.example.io"
 }
-"apiexport:pms/core.yaml#1": {
+"workspace:root:pms": {
+  label: "Workspace root:pms"
+}
+"workspace:root:pms"."apiexport:pms/core.yaml#1": {
   shape: sql_table
   label: "APIExport core.example.io · pms/core.yaml#1"
   style.fill: "#f08c00"
   "Widget": "widgets.core.example.io" {constraint: "v1 · also in other.example.io"}
 }
-"apiexport:test/core.yaml#1": {
+"workspace:root:pms"."apiexport:test/core.yaml#1": {
   shape: sql_table
   label: "APIExport core.example.io · test/core.yaml#1"
   style.fill: "#f08c00"
   "Widget": "widgets.core.example.io" {constraint: "v1 · also in other.example.io"}
 }
-"apiexport:ws/other.yaml#1": {
+"workspace:root:pms"."apiexport:ws/other.yaml#1": {
   shape: sql_table
   label: "APIExport other.example.io"
   style.fill: "#f08c00"
   "Widget": "widgets.core.example.io" {constraint: "v1 · also in core.example.io"}
 }
-"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/core.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
-"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:test/core.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
-"workspacetype:types/account.yaml#1"."other.example.io" -> "apiexport:ws/other.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:test/core.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
+"workspacetype:types/account.yaml#1"."other.example.io" -> "workspace:root:pms"."apiexport:ws/other.yaml#1" {style.stroke: "#e03131"; style.stroke-width: 3}
 ` + legend(legendBindsRefused, legendShared),
 		},
 		{
@@ -1190,12 +1254,15 @@ func TestRenderD2FlagsBindingsKcpRefuses(t *testing.T) {
   "core.example.io": "root:pms"
   "tenancy.kcp.io": "root"
 }
-"apiexport:pms/core.yaml#1": {
+"workspace:root:pms": {
+  label: "Workspace root:pms"
+}
+"workspace:root:pms"."apiexport:pms/core.yaml#1": {
   shape: sql_table
   label: "APIExport core.example.io · pms/core.yaml#1"
   "Widget": "widgets.core.example.io" {constraint: "v1"}
 }
-"apiexport:test/core.yaml#1": {
+"workspace:root:pms"."apiexport:test/core.yaml#1": {
   shape: sql_table
   label: "APIExport core.example.io · test/core.yaml#1"
   "Widget": "widgets.core.example.io" {constraint: "v1"}
@@ -1205,16 +1272,298 @@ func TestRenderD2FlagsBindingsKcpRefuses(t *testing.T) {
   style.stroke-dash: 3
   "tenancy.kcp.io @ root"
 }
-"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
-"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:test/core.yaml#1" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:test/core.yaml#1" {style.stroke: "#1971c2"}
 "workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
 ` + legend(legendBindsByDefault),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := string(pie.RenderD2(tt.model)); got != tt.want {
-				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, tt.want)
+			if got := string(pie.RenderD2(tt.model)); got != elkLayout+tt.want {
+				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, elkLayout+tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderD2ComparesNamesAsKcpDoes(t *testing.T) {
+	widgets := func(s *pie.Schema) {}
+	gizmos := func(change func(s *pie.Schema)) func(s *pie.Schema) {
+		return func(s *pie.Schema) {
+			s.Name, s.Kind, s.Plural, s.Singular, s.ListKind, s.ShortNames = "v1.gizmos.core.example.io", "Gizmo", "gizmos", "gizmo", "GizmoList", []string{"gz"}
+			change(s)
+		}
+	}
+	tests := []struct {
+		name    string
+		a, b    func(s *pie.Schema)
+		bAbsent bool
+		wantRow string
+	}{
+		{name: "resources that share no name do not conflict", a: widgets, b: gizmos(func(s *pie.Schema) {}),
+			wantRow: `"a.example.io": "root:pms"`},
+		{name: "a shared singular conflicts", a: widgets, b: gizmos(func(s *pie.Schema) { s.Singular = "widget" }),
+			wantRow: `"a.example.io": "root:pms · conflicts with b.example.io on widgets.core.example.io (both use widget)"`},
+		{name: "a shared short name conflicts", a: widgets, b: gizmos(func(s *pie.Schema) { s.ShortNames = []string{"gz", "wd"} }),
+			wantRow: `"a.example.io": "root:pms · conflicts with b.example.io on widgets.core.example.io (both use wd)"`},
+		{name: "a short name that is the other's plural conflicts", a: widgets, b: gizmos(func(s *pie.Schema) { s.ShortNames = []string{"widgets"} }),
+			wantRow: `"a.example.io": "root:pms · conflicts with b.example.io on widgets.core.example.io (both use widgets)"`},
+		{name: "a shared kind conflicts", a: widgets, b: gizmos(func(s *pie.Schema) { s.Kind = "Widget" }),
+			wantRow: `"a.example.io": "root:pms · conflicts with b.example.io on widgets.core.example.io (both use Widget)"`},
+		{name: "a shared list kind conflicts", a: widgets, b: gizmos(func(s *pie.Schema) { s.ListKind = "WidgetList" }),
+			wantRow: `"a.example.io": "root:pms · conflicts with b.example.io on widgets.core.example.io (both use WidgetList)"`},
+		{name: "names are never compared with kinds", a: widgets, b: gizmos(func(s *pie.Schema) { s.Singular, s.ShortNames = "Widget", []string{"WidgetList"} }),
+			wantRow: `"a.example.io": "root:pms"`},
+		{name: "a singular that is missing never matches", a: func(s *pie.Schema) { s.Singular = "" },
+			b:       gizmos(func(s *pie.Schema) { s.Singular = "" }),
+			wantRow: `"a.example.io": "root:pms"`},
+		{name: "a list kind that is missing never matches", a: func(s *pie.Schema) { s.ListKind = "" },
+			b:       gizmos(func(s *pie.Schema) { s.ListKind = "" }),
+			wantRow: `"a.example.io": "root:pms"`},
+		{name: "the same names in another group do not conflict", a: widgets, b: func(s *pie.Schema) { s.Name, s.Group = "v1.widgets.other.example.io", "other.example.io" },
+			wantRow: `"a.example.io": "root:pms"`},
+		{name: "a resource whose schema is not in the tree is compared by its plural", a: widgets, b: func(s *pie.Schema) { s.Name = "v2.widgets.core.example.io" }, bAbsent: true,
+			wantRow: `"a.example.io": "root:pms · conflicts with b.example.io on widgets.core.example.io"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := pie.Schema{Path: "ws/a/schema.yaml", Name: "v1.widgets.core.example.io", Group: "core.example.io",
+				Kind: "Widget", Plural: "widgets", Singular: "widget", ListKind: "WidgetList", ShortNames: []string{"wd"}}
+			b := a
+			b.Path, b.ShortNames = "ws/b/schema.yaml", slices.Clone(a.ShortNames)
+			tt.a(&a)
+			tt.b(&b)
+			schemas := []pie.Schema{a, b}
+			if tt.bAbsent {
+				schemas = schemas[:1]
+			}
+			model := pie.Model{
+				Exports: []pie.Export{
+					{Path: "ws/a/export.yaml", Doc: 1, Name: "a.example.io", Resources: []pie.Resource{{Group: a.Group, Name: a.Plural, Schema: a.Name}}},
+					{Path: "ws/b/export.yaml", Doc: 1, Name: "b.example.io", Resources: []pie.Resource{{Group: b.Group, Name: b.Plural, Schema: b.Name}}},
+				},
+				Schemas: schemas,
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{
+					{Path: "root:pms", Name: "a.example.io"}, {Path: "root:pms", Name: "b.example.io"},
+				}}},
+			}
+			if got := string(pie.RenderD2(model)); !strings.Contains(got, "  "+tt.wantRow+"\n") {
+				t.Errorf("RenderD2() has no row\n%s\nin\n%s", tt.wantRow, got)
+			}
+		})
+	}
+}
+
+func TestRenderD2GroupsExportsByWorkspace(t *testing.T) {
+	core := pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io"}
+	account := func(binds ...pie.ExportRef) []pie.WorkspaceType {
+		return []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: binds}}
+	}
+	bindingInPMS := func(ref pie.ExportRef) []pie.APIBinding {
+		return []pie.APIBinding{{Path: "pms/b.yaml", Doc: 1, Name: "b", Export: ref}}
+	}
+	tests := []struct {
+		name  string
+		model pie.Model
+		want  string
+	}{
+		{
+			name: "exports go in the box of the workspace their references agree on, and edges follow them",
+			model: pie.Model{
+				Exports: []pie.Export{
+					{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{
+						{Group: "core.example.io", Name: "accountinfos", Schema: "v1.accountinfos.core.example.io"},
+					}},
+					{Path: "pms/system.yaml", Doc: 1, Name: "system.example.io"},
+					{Path: "x/term.yaml", Doc: 1, Name: "term.example.io", Claims: []pie.Claim{{Group: "core.example.io", Resource: "accountinfos", Verbs: []string{"get"}}}},
+				},
+				Schemas:        []pie.Schema{{Path: "pms/infos.yaml", Name: "v1.accountinfos.core.example.io", Group: "core.example.io", Kind: "AccountInfo", Plural: "accountinfos"}},
+				WorkspaceTypes: account(pie.ExportRef{Path: "root:pms", Name: "core.example.io"}),
+				APIBindings:    bindingInPMS(pie.ExportRef{Path: "root:pms", Name: "system.example.io"}),
+			},
+			want: `"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account"
+  "core.example.io": "root:pms"
+}
+"apibindings:pms": {
+  shape: sql_table
+  label: "APIBindings in pms"
+  "system.example.io": "root:pms"
+}
+"workspace:root:pms": {
+  label: "Workspace root:pms"
+}
+"workspace:root:pms"."apiexport:pms/core.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io"
+  "AccountInfo": "accountinfos.core.example.io" {constraint: "v1"}
+}
+"workspace:root:pms"."apiexport:pms/system.yaml#1": {
+  shape: sql_table
+  label: "APIExport system.example.io"
+}
+"apiexport:x/term.yaml#1": {
+  shape: sql_table
+  label: "APIExport term.example.io · 1 claim"
+}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
+"apibindings:pms"."system.example.io" -> "workspace:root:pms"."apiexport:pms/system.yaml#1" {style.stroke: "#2f9e44"}
+"apiexport:x/term.yaml#1" -> "workspace:root:pms"."apiexport:pms/core.yaml#1"."AccountInfo": "claims get" {style.stroke: "#7048e8"; style.stroke-dash: 4}
+` + legend(legendBindsByDefault, legendBindsByAPIBinding, legendClaims),
+		},
+		{
+			name: "an empty path names no workspace, so it neither places an export nor contradicts a path",
+			model: pie.Model{
+				Exports:        []pie.Export{core},
+				WorkspaceTypes: account(pie.ExportRef{Name: "core.example.io"}),
+				APIBindings:    bindingInPMS(pie.ExportRef{Path: "root:pms", Name: "core.example.io"}),
+			},
+			want: `"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account"
+  "core.example.io": "(own workspace)"
+}
+"apibindings:pms": {
+  shape: sql_table
+  label: "APIBindings in pms"
+  "core.example.io": "root:pms"
+}
+"workspace:root:pms": {
+  label: "Workspace root:pms"
+}
+"workspace:root:pms"."apiexport:pms/core.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io"
+}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
+"apibindings:pms"."core.example.io" -> "workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
+` + legend(legendBindsByDefault, legendBindsByAPIBinding),
+		},
+		{
+			name: "references that disagree on the workspace leave the export ungrouped, and say so",
+			model: pie.Model{
+				Exports:        []pie.Export{core},
+				WorkspaceTypes: account(pie.ExportRef{Path: "root:a", Name: "core.example.io"}),
+				APIBindings:    bindingInPMS(pie.ExportRef{Path: "root:b", Name: "core.example.io"}),
+			},
+			want: `"workspacetype:types/account.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType account"
+  "core.example.io": "root:a"
+}
+"apibindings:pms": {
+  shape: sql_table
+  label: "APIBindings in pms"
+  "core.example.io": "root:b"
+}
+"apiexport:pms/core.yaml#1": {
+  shape: sql_table
+  label: "APIExport core.example.io · references disagree: root:a, root:b"
+}
+"workspacetype:types/account.yaml#1"."core.example.io" -> "apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
+"apibindings:pms"."core.example.io" -> "apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
+` + legend(legendBindsByDefault, legendBindsByAPIBinding),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderD2(tt.model)); got != elkLayout+tt.want {
+				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, elkLayout+tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckWarnsAboutBindingsKcpRefuses(t *testing.T) {
+	exportOf := func(path, name string, resources ...pie.Resource) pie.Export {
+		return pie.Export{Path: path, Doc: 1, Name: name, Resources: resources}
+	}
+	inPMS := func(names ...string) []pie.ExportRef {
+		var refs []pie.ExportRef
+		for _, name := range names {
+			refs = append(refs, pie.ExportRef{Path: "root:pms", Name: name})
+		}
+		return refs
+	}
+	gizmos := pie.Resource{Group: "core.example.io", Name: "gizmos", Schema: "v1.gizmos.core.example.io"}
+	gizmoKindWidget := pie.Schema{Path: "ws/gizmos.yaml", Name: "v1.gizmos.core.example.io", Group: "core.example.io", Kind: "Widget", Plural: "gizmos"}
+	tests := []struct {
+		name  string
+		model pie.Model
+		want  []string
+	}{
+		{
+			name: "each pair of exports a WorkspaceType binds that kcp refuses together is one warning, at the type",
+			model: pie.Model{
+				Exports: []pie.Export{
+					exportOf("ws/a.yaml", "a.example.io", widgetResource()),
+					exportOf("ws/b.yaml", "b.example.io", widgetResource()),
+					exportOf("ws/c.yaml", "c.example.io", widgetResource()),
+				},
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: inPMS("a.example.io", "b.example.io", "c.example.io")}},
+			},
+			want: []string{
+				"warning: types/account.yaml#1: WorkspaceType account binds a.example.io and b.example.io, which both serve widgets.core.example.io; kcp binds only one of them",
+				"warning: types/account.yaml#1: WorkspaceType account binds a.example.io and c.example.io, which both serve widgets.core.example.io; kcp binds only one of them",
+				"warning: types/account.yaml#1: WorkspaceType account binds b.example.io and c.example.io, which both serve widgets.core.example.io; kcp binds only one of them",
+			},
+		},
+		{
+			name: "resources that clash on a name are both named, with the name",
+			model: pie.Model{
+				Exports:        []pie.Export{exportOf("ws/a.yaml", "a.example.io", widgetResource()), exportOf("ws/b.yaml", "b.example.io", gizmos)},
+				Schemas:        []pie.Schema{widgetSchemaAt("ws/widgets.yaml"), gizmoKindWidget},
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: inPMS("a.example.io", "b.example.io")}},
+			},
+			want: []string{
+				"warning: types/account.yaml#1: WorkspaceType account binds a.example.io and b.example.io, whose widgets.core.example.io and gizmos.core.example.io both use Widget; kcp binds only one of them",
+			},
+		},
+		{
+			name: "a binding inherited through extend warns at the type that inherits it",
+			model: pie.Model{
+				Exports: []pie.Export{exportOf("ws/a.yaml", "a.example.io", widgetResource()), exportOf("ws/b.yaml", "b.example.io", widgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{
+					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: inPMS("a.example.io"), Extends: []pie.TypeRef{{Name: "base"}}},
+					{Path: "types/base.yaml", Doc: 1, Name: "base", Binds: inPMS("b.example.io")},
+				},
+			},
+			want: []string{
+				"warning: types/account.yaml#1: WorkspaceType account binds a.example.io and b.example.io, which both serve widgets.core.example.io; kcp binds only one of them",
+			},
+		},
+		{
+			name: "a directory of APIBinding files warns at its own file of the later binding",
+			model: pie.Model{
+				Exports: []pie.Export{exportOf("ws/a.yaml", "a.example.io", widgetResource()), exportOf("ws/b.yaml", "b.example.io", widgetResource())},
+				APIBindings: []pie.APIBinding{
+					{Path: "features/x/b.yaml", Doc: 1, Name: "b", Export: pie.ExportRef{Path: "root:pms", Name: "b.example.io"}},
+					{Path: "pms/a.yaml", Doc: 1, Name: "a", Export: pie.ExportRef{Path: "root:pms", Name: "a.example.io"}},
+					{Path: "pms/b.yaml", Doc: 2, Name: "b", Export: pie.ExportRef{Path: "root:pms", Name: "b.example.io"}},
+				},
+			},
+			want: []string{
+				"warning: pms/b.yaml#2: APIBindings in pms bind a.example.io and b.example.io, which both serve widgets.core.example.io; kcp binds only one of them",
+			},
+		},
+		{
+			name: "bindings kcp accepts leave nothing to say",
+			model: pie.Model{
+				Exports:        []pie.Export{exportOf("ws/a.yaml", "a.example.io", widgetResource()), exportOf("ws/b.yaml", "b.example.io", gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: inPMS("a.example.io", "b.example.io")}},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			for _, d := range pie.Check(tt.model) {
+				got = append(got, d.String())
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("Check() =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
 			}
 		})
 	}
@@ -1254,12 +1603,21 @@ func TestRenderD2ExplainsTheRelationsItDraws(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := string(pie.RenderD2(tt.model)); got != tt.want {
-				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, tt.want)
+			if got := string(pie.RenderD2(tt.model)); got != elkLayout+tt.want {
+				t.Errorf("RenderD2() =\n%s\nwant\n%s", got, elkLayout+tt.want)
 			}
 		})
 	}
 }
+
+// elkLayout opens every diagram: ELK routes the edges between the use cases and the exports
+// at right angles, which reads better on a page than d2's default layout.
+const elkLayout = `vars: {
+  d2-config: {
+    layout-engine: elk
+  }
+}
+`
 
 // legend is the box a diagram ends with, drawing one example edge per relation it shows.
 func legend(entries ...string) string {
@@ -1365,6 +1723,19 @@ func apiResourceSchema(kind, plural, group string) *apisv1alpha1.APIResourceSche
 			Names: apiextensionsv1.CustomResourceDefinitionNames{Plural: plural, Kind: kind},
 			Scope: apiextensionsv1.ClusterScoped,
 		},
+	}
+}
+
+func withNames(ars *apisv1alpha1.APIResourceSchema, singular, listKind string, shortNames ...string) *apisv1alpha1.APIResourceSchema {
+	ars.Spec.Names.Singular, ars.Spec.Names.ListKind, ars.Spec.Names.ShortNames = singular, listKind, shortNames
+	return ars
+}
+
+func workspace(name string, of *tenancyv1alpha1.WorkspaceTypeReference) *tenancyv1alpha1.Workspace {
+	return &tenancyv1alpha1.Workspace{
+		TypeMeta:   metav1.TypeMeta{APIVersion: tenancyv1alpha1.SchemeGroupVersion.String(), Kind: "Workspace"},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec:       tenancyv1alpha1.WorkspaceSpec{Type: of},
 	}
 }
 

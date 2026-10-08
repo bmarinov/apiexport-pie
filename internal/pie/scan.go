@@ -25,6 +25,7 @@ var (
 	apiExportV1alpha1Kind  = apisv1alpha1.SchemeGroupVersion.WithKind("APIExport")
 	apiResourceSchemaKind  = apisv1alpha1.SchemeGroupVersion.WithKind("APIResourceSchema")
 	workspaceTypeKind      = tenancyv1alpha1.SchemeGroupVersion.WithKind("WorkspaceType")
+	workspaceKind          = tenancyv1alpha1.SchemeGroupVersion.WithKind("Workspace")
 	apiBindingKind         = apisv1alpha2.SchemeGroupVersion.WithKind("APIBinding")
 	apiBindingV1alpha1Kind = apisv1alpha1.SchemeGroupVersion.WithKind("APIBinding")
 )
@@ -125,12 +126,25 @@ func (s *scan) addDocument(name string, n int, doc []byte) {
 				Group:  ars.Spec.Group,
 				Kind:   ars.Spec.Names.Kind,
 				Plural: ars.Spec.Names.Plural,
+
+				Singular:   ars.Spec.Names.Singular,
+				ShortNames: ars.Spec.Names.ShortNames,
+				ListKind:   ars.Spec.Names.ListKind,
 			})
 		}
 	case workspaceTypeKind:
 		var wt tenancyv1alpha1.WorkspaceType
 		if s.decode(name, n, kind, doc, &wt) {
 			s.model.WorkspaceTypes = append(s.model.WorkspaceTypes, workspaceTypeFrom(name, n, wt))
+		}
+	case workspaceKind:
+		var ws tenancyv1alpha1.Workspace
+		if s.decode(name, n, kind, doc, &ws) {
+			w := Workspace{Path: name, Doc: n, Name: ws.Name}
+			if ws.Spec.Type != nil {
+				w.Type = TypeRef{Path: ws.Spec.Type.Path, Name: string(ws.Spec.Type.Name)}
+			}
+			s.model.Workspaces = append(s.model.Workspaces, w)
 		}
 	case apiBindingKind:
 		var binding apisv1alpha2.APIBinding

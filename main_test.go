@@ -67,7 +67,12 @@ func TestRun(t *testing.T) {
 
 		code := run(context.Background(), []string{dir}, &stdout, &stderr)
 
-		want := `"apiexport:ws/export.yaml#1": {
+		want := `vars: {
+  d2-config: {
+    layout-engine: elk
+  }
+}
+"apiexport:ws/export.yaml#1": {
   shape: sql_table
   label: "APIExport core.example.io"
   "Widget": "widgets.core.example.io" {constraint: "v1"}
@@ -90,6 +95,33 @@ func TestRun(t *testing.T) {
 		if code != 0 || !strings.Contains(stdout.String(), `"apiexport:ws/export.yaml#1"`) ||
 			!strings.HasPrefix(stderr.String(), "warning: ws/broken.yaml#1: ") || strings.Count(stderr.String(), "\n") != 1 {
 			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0, the core export drawn, one warning for ws/broken.yaml#1", code, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("warns on stderr about exports a use case binds that kcp refuses together", func(t *testing.T) {
+		dir := writeTree(t, map[string]string{
+			"ws/export.yaml":  exportManifest,
+			"ws/other.yaml":   strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1),
+			"ws/widgets.yaml": schemaManifest,
+			"types/account.yaml": `apiVersion: tenancy.kcp.io/v1alpha1
+kind: WorkspaceType
+metadata:
+  name: account
+spec:
+  defaultAPIBindings:
+  - export: core.example.io
+    path: root:pms
+  - export: other.example.io
+    path: root:pms
+`,
+		})
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{dir}, &stdout, &stderr)
+
+		want := "warning: types/account.yaml#1: WorkspaceType account binds core.example.io and other.example.io, which both serve widgets.core.example.io; kcp binds only one of them\n"
+		if code != 0 || stderr.String() != want || !strings.Contains(stdout.String(), `"workspacetype:types/account.yaml#1"`) {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0, the diagram, and stderr:\n%s", code, stdout.String(), stderr.String(), want)
 		}
 	})
 

@@ -8,6 +8,7 @@ type Model struct {
 	Exports        []Export
 	Schemas        []Schema
 	WorkspaceTypes []WorkspaceType
+	Workspaces     []Workspace
 	APIBindings    []APIBinding
 }
 
@@ -48,6 +49,11 @@ type Schema struct {
 	Group  string
 	Kind   string
 	Plural string
+	// Singular, ShortNames and ListKind are what else kcp compares before it binds two resources of
+	// one group into a workspace.
+	Singular   string
+	ShortNames []string
+	ListKind   string
 }
 
 // Level says how much a Diagnostic matters to someone reading the diagram.
@@ -93,6 +99,15 @@ type WorkspaceType struct {
 type ExportRef struct {
 	Path string
 	Name string
+}
+
+// Workspace is a workspace the tree creates. Type names its WorkspaceType; an empty name means kcp's
+// default. Where the workspace is created is not in the document.
+type Workspace struct {
+	Path string
+	Doc  int
+	Name string
+	Type TypeRef
 }
 
 // TypeRef names a WorkspaceType and the workspace path it lives in.
