@@ -3,6 +3,7 @@ package pie
 import (
 	"path"
 	"slices"
+	"strings"
 )
 
 // ownWorkspace stands in for an empty export path, which kcp reads as the workspace of the
@@ -84,6 +85,53 @@ func bindingsOf(t WorkspaceType, types []WorkspaceType) []binding {
 	}
 	visit(t, "", bindsByDefault)
 	return bound
+}
+
+// useCase is a set of workspaces that bind the same exports: those of one WorkspaceType, or those of
+// one directory of APIBinding files. withheld says, per export, the claims its binding file does not
+// accept; kcp accepts every claim of a WorkspaceType's bindings, so those have none.
+type useCase struct {
+	name     string
+	column   []string
+	exports  []string
+	withheld map[string][]GroupResource
+}
+
+// useCasesOf lists the use cases of a tree: its WorkspaceTypes, then its directories of APIBindings.
+func useCasesOf(m Model) []useCase {
+	exportsOf := func(bindings []binding) []string {
+		var names []string
+		for _, bd := range bindings {
+			names = append(names, bd.ref.Name)
+		}
+		return names
+	}
+	var cases []useCase
+	for _, t := range m.WorkspaceTypes {
+		cases = append(cases, useCase{name: t.Name, column: []string{t.Name}, exports: exportsOf(bindingsOf(t, m.WorkspaceTypes))})
+	}
+	for _, dir := range bindingsByDir(m.APIBindings) {
+		withheld := map[string][]GroupResource{}
+		for _, bd := range dir.bound {
+			named := exportsNamed(bd.ref.Name, m.Exports)
+			if len(named) == 0 {
+				continue
+			}
+			accepts := firstBindingOf(bd.ref.Name, dir.dir, m.APIBindings).Accepts
+			for _, c := range named[0].Claims {
+				if gr := (GroupResource{Group: c.Group, Resource: c.Resource}); !slices.Contains(accepts, gr) {
+					withheld[bd.ref.Name] = append(withheld[bd.ref.Name], gr)
+				}
+			}
+		}
+		cases = append(cases, useCase{
+			name:     "APIBindings in " + dir.dir,
+			column:   append([]string{"APIBindings in"}, strings.SplitAfter(dir.dir, "/")...),
+			exports:  exportsOf(dir.bound),
+			withheld: withheld,
+		})
+	}
+	return cases
 }
 
 func typeNamed(name string, types []WorkspaceType) (WorkspaceType, bool) {

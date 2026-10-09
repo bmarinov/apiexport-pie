@@ -119,9 +119,31 @@ spec:
 
 		code := run(context.Background(), []string{dir}, &stdout, &stderr)
 
-		want := "warning: types/account.yaml#1: WorkspaceType account binds core.example.io and other.example.io, which both serve widgets.core.example.io; kcp binds only one of them\n"
+		want := "warning: types/account.yaml#1: WorkspaceType account binds core.example.io and other.example.io, which both serve widgets.core.example.io; kcp binds only one of them\n" +
+			"notice: ws/other.yaml#1: API group core.example.io is served by 2 APIExports: core.example.io, other.example.io\n"
 		if code != 0 || stderr.String() != want || !strings.Contains(stdout.String(), `"workspacetype:types/account.yaml#1"`) {
 			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0, the diagram, and stderr:\n%s", code, stdout.String(), stderr.String(), want)
+		}
+	})
+
+	t.Run("points out on stderr what is worth a look, and still succeeds", func(t *testing.T) {
+		dir := writeTree(t, map[string]string{
+			"ws/export.yaml": exportManifest,
+			"types/security.yaml": `apiVersion: tenancy.kcp.io/v1alpha1
+kind: WorkspaceType
+metadata:
+  name: security
+spec: {}
+`,
+		})
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{dir}, &stdout, &stderr)
+
+		want := "notice: types/security.yaml#1: WorkspaceType security binds no APIExport\n" +
+			"notice: ws/export.yaml#1: APIExport core.example.io is bound by no WorkspaceType or APIBinding in the tree\n"
+		if code != 0 || stderr.String() != want {
+			t.Errorf("run() = %d\nstderr:\n%s\nwant 0 and stderr:\n%s", code, stderr.String(), want)
 		}
 	})
 

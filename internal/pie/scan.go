@@ -34,9 +34,11 @@ var (
 const templateAction = `\{\{(?:[^}]|\}[^}])*\}\}`
 
 // Manifests are often Go templates. Rather than render them, which needs values nobody has here,
-// actions are replaced with text that keeps the YAML decodable.
+// actions are replaced with text that keeps the YAML decodable. A line of only an action goes, and
+// so does one whose action is followed by an empty list or map, the nothing of the branch not taken
+// ("{{- else }} []"), or by a comment.
 var (
-	templateLine  = regexp.MustCompile(`(?m)^[ \t]*` + templateAction + `[ \t]*$`)
+	templateLine  = regexp.MustCompile(`(?m)^[ \t]*` + templateAction + `[ \t]*(?:\[\]|\{\}|#.*)?$`)
 	templateValue = regexp.MustCompile(`(?m)(:[ \t]+)` + templateAction + `[ \t]*$`)
 	templateText  = regexp.MustCompile(templateAction)
 

@@ -35,41 +35,10 @@ type surfaceRow struct {
 // surfaceOf lays out which use case gets which kinds and grants which claims. A use case that binds
 // an export gets all of it, so each export reads as one block, the bundle a workspace takes or leaves.
 func surfaceOf(m Model) surface {
-	// useCase is a column. withheld says, per export, the claims a binding file does not accept;
-	// kcp accepts every claim of a WorkspaceType's bindings, so those columns have none.
-	type useCase struct {
-		exports  []string
-		withheld map[string][]GroupResource
-	}
 	var s surface
-	var cases []useCase
-	exportsOf := func(bindings []binding) []string {
-		var names []string
-		for _, bd := range bindings {
-			names = append(names, bd.ref.Name)
-		}
-		return names
-	}
-	for _, t := range m.WorkspaceTypes {
-		s.columns = append(s.columns, []string{t.Name})
-		cases = append(cases, useCase{exports: exportsOf(bindingsOf(t, m.WorkspaceTypes))})
-	}
-	for _, dir := range bindingsByDir(m.APIBindings) {
-		withheld := map[string][]GroupResource{}
-		for _, bd := range dir.bound {
-			named := exportsNamed(bd.ref.Name, m.Exports)
-			if len(named) == 0 {
-				continue
-			}
-			accepts := firstBindingOf(bd.ref.Name, dir.dir, m.APIBindings).Accepts
-			for _, c := range named[0].Claims {
-				if gr := (GroupResource{Group: c.Group, Resource: c.Resource}); !slices.Contains(accepts, gr) {
-					withheld[bd.ref.Name] = append(withheld[bd.ref.Name], gr)
-				}
-			}
-		}
-		s.columns = append(s.columns, append([]string{"APIBindings in"}, strings.SplitAfter(dir.dir, "/")...))
-		cases = append(cases, useCase{exports: exportsOf(dir.bound), withheld: withheld})
+	cases := useCasesOf(m)
+	for _, c := range cases {
+		s.columns = append(s.columns, c.column)
 	}
 
 	cellsOf := func(export string, claims []Claim) [][]string {
@@ -163,6 +132,12 @@ func RenderSurface(m Model) []byte {
 			b.WriteString("| " + strings.Join(cells, " | ") + " |\n")
 		}
 	}
+	if notes := notices(m); len(notes) > 0 {
+		b.WriteString("\n**Worth a look**\n\n")
+		for _, n := range notes {
+			b.WriteString("- " + n.Reason + "\n")
+		}
+	}
 	return b.Bytes()
 }
 
@@ -186,9 +161,12 @@ func claimSets(claims []Claim) []claimSet {
 	return sets
 }
 
-// writes says whether the claims let the provider change anything: a verb other than get, list, watch.
-func (s claimSet) writes() bool {
-	for _, verb := range strings.Split(s.verbs, ", ") {
+// writes says whether the claims let the provider change anything.
+func (s claimSet) writes() bool { return canWrite(s.claims[0].Verbs) }
+
+// canWrite says whether verbs go beyond reading: a verb other than get, list, watch.
+func canWrite(verbs []string) bool {
+	for _, verb := range verbs {
 		if !slices.Contains([]string{"get", "list", "watch"}, verb) {
 			return true
 		}

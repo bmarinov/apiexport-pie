@@ -60,7 +60,7 @@ func TestRealTreesDrawWithoutWarnings(t *testing.T) {
 			cmd := exec.CommandContext(t.Context(), bin, dir)
 			cmd.Stdout, cmd.Stderr = &stdout, &stderr
 
-			if err := cmd.Run(); err != nil || stderr.Len() != 0 {
+			if err := cmd.Run(); err != nil || strings.Contains(stderr.String(), "warning: ") {
 				t.Fatalf("apiexport-pie %s: %v\nstderr:\n%s", dir, err, stderr.String())
 			}
 			renderWithD2(t, stdout.Bytes())

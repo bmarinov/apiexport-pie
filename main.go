@@ -70,7 +70,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		diags = append(diags, pie.Check(model)...)
 		var notes []string
 		for _, d := range diags {
-			if d.Level == pie.Warning || *verbose {
+			if d.Level != pie.Skipped || *verbose {
 				notes = append(notes, d.String())
 			}
 		}

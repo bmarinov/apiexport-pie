@@ -72,9 +72,11 @@ const (
 	Warning Level = iota + 1
 	// Skipped means a document is not drawn because it is of no interest.
 	Skipped
+	// Notice means something kcp allows but a designer may want to look at: a fact, not a fault.
+	Notice
 )
 
-var levelNames = map[Level]string{Warning: "warning", Skipped: "skipped"}
+var levelNames = map[Level]string{Warning: "warning", Skipped: "skipped", Notice: "notice"}
 
 func (l Level) String() string { return levelNames[l] }
 
