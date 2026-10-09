@@ -29,6 +29,14 @@ type Claim struct {
 	Group    string
 	Resource string
 	Verbs    []string
+	// Selected says a default selector narrows the claim to some objects of the resource.
+	Selected bool
+}
+
+// GroupResource names a resource by its group, empty for the core group, and its plural.
+type GroupResource struct {
+	Group    string
+	Resource string
 }
 
 // location is where an object is written down, in the path#N form diagnostics use.
@@ -125,4 +133,6 @@ type APIBinding struct {
 	Doc    int
 	Name   string
 	Export ExportRef
+	// Accepts lists the export's claims the binding accepts; kcp grants it no others.
+	Accepts []GroupResource
 }

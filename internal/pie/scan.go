@@ -214,11 +214,18 @@ func (s *scan) addBinding(name string, n int, binding apisv1alpha2.APIBinding) {
 		s.report(Warning, name, n, "APIBinding names no export")
 		return
 	}
+	var accepts []GroupResource
+	for _, c := range binding.Spec.PermissionClaims {
+		if c.State == apisv1alpha2.ClaimAccepted {
+			accepts = append(accepts, GroupResource{Group: c.Group, Resource: c.Resource})
+		}
+	}
 	s.model.APIBindings = append(s.model.APIBindings, APIBinding{
-		Path:   name,
-		Doc:    n,
-		Name:   binding.Name,
-		Export: ExportRef{Path: export.Path, Name: export.Name},
+		Path:    name,
+		Doc:     n,
+		Name:    binding.Name,
+		Export:  ExportRef{Path: export.Path, Name: export.Name},
+		Accepts: accepts,
 	})
 }
 
@@ -232,7 +239,8 @@ func exportFrom(file string, doc int, export apisv1alpha2.APIExport) Export {
 		e.Resources = append(e.Resources, Resource{Group: r.Group, Name: r.Name, Schema: r.Schema})
 	}
 	for _, c := range export.Spec.PermissionClaims {
-		e.Claims = append(e.Claims, Claim{Group: c.Group, Resource: c.Resource, Verbs: c.Verbs})
+		selected := c.DefaultSelector != nil && !c.DefaultSelector.MatchAll
+		e.Claims = append(e.Claims, Claim{Group: c.Group, Resource: c.Resource, Verbs: c.Verbs, Selected: selected})
 	}
 	return e
 }

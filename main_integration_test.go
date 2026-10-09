@@ -33,6 +33,20 @@ func TestDiagramRendersWithD2(t *testing.T) {
 	renderWithD2(t, diagram)
 }
 
+func TestOutputToSVGIsDrawnByD2(t *testing.T) {
+	bin := buildBinary(t)
+	dir := writeTree(t, map[string]string{"ws/export.yaml": exportManifest, "ws/widgets.yaml": schemaManifest})
+	for _, args := range [][]string{{"-o"}, {"--surface", "-o"}} {
+		file := filepath.Join(t.TempDir(), "out.svg")
+		if out, err := exec.CommandContext(t.Context(), bin, append(args, file, dir)...).CombinedOutput(); err != nil {
+			t.Fatalf("apiexport-pie %v: %v\n%s", args, err, out)
+		}
+		if svg, err := os.ReadFile(file); err != nil || !bytes.Contains(svg, []byte("<svg")) {
+			t.Errorf("apiexport-pie %v %s: want an SVG, read error %v", args, file, err)
+		}
+	}
+}
+
 func TestRealTreesDrawWithoutWarnings(t *testing.T) {
 	dirs := os.Getenv(smokeDirsEnv)
 	if dirs == "" {
