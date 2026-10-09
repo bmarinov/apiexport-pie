@@ -174,8 +174,8 @@ spec:
 		code := run(context.Background(), []string{"--surface", "-o", file, dir}, &stdout, &stderr)
 
 		written, err := os.ReadFile(file)
-		if code != 0 || err != nil || stdout.Len() != 0 || !strings.HasPrefix(string(written), "\"surface\": |`md\n") ||
-			!strings.Contains(string(written), "| **core.example.io** | Widget |") {
+		if code != 0 || err != nil || stdout.Len() != 0 || !strings.HasPrefix(string(written), "grid-rows: ") ||
+			!strings.Contains(string(written), `"Widget"`) {
 			t.Errorf("run() = %d, read error %v\nstdout:\n%s\nstderr:\n%s\nFILE:\n%s\nwant 0 and the table as d2 in FILE", code, err, stdout.String(), stderr.String(), written)
 		}
 	})
@@ -305,7 +305,7 @@ spec:
 		code := run(context.Background(), []string{"--surface", "-o", file, dir}, &stdout, &stderr)
 
 		drawn, err := os.ReadFile(file)
-		if code != 0 || err != nil || !strings.HasPrefix(string(drawn), "drawn by d2\n\"surface\": |`md\n") {
+		if code != 0 || err != nil || !strings.HasPrefix(string(drawn), "drawn by d2\ngrid-rows: ") {
 			t.Errorf("run() = %d, read error %v\nstderr:\n%s\nd2 got:\n%s\nwant 0 and the table as d2", code, err, stderr.String(), drawn)
 		}
 	})

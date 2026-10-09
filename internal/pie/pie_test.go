@@ -1610,7 +1610,7 @@ func TestRenderSurface(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "each export is a block of its kinds, marked for every use case that binds it",
+			name: "each export is a block of its kinds, marked for every use case that binds it, and a kind without its schema says so",
 			model: pie.Model{
 				Exports: []pie.Export{core, {Path: "pms/other.yaml", Doc: 1, Name: "other.example.io", Resources: []pie.Resource{
 					{Group: "other.example.io", Name: "things", Schema: "v1.things.other.example.io"},
@@ -1626,7 +1626,7 @@ func TestRenderSurface(t *testing.T) {
 |---|---|:-:|:-:|:-:|
 | **core.example.io** | Widget | ● | ● |  |
 |  | Gadget | ● | ● |  |
-| **other.example.io** | things |  | ● | ● |
+| **other.example.io** | things · not in tree |  | ● | ● |
 `,
 		},
 		{
@@ -1672,6 +1672,36 @@ func TestRenderSurface(t *testing.T) {
 	}
 }
 
+func TestRenderSurfaceNamesTheGroupOfAKindThatIsNotTheExportsOwn(t *testing.T) {
+	model := pie.Model{
+		Exports: []pie.Export{
+			{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{
+				widgetResource(), {Group: "ui.example.io", Name: "panels", Schema: "v1.panels.ui.example.io"},
+			}},
+			{Path: "pms/system.yaml", Doc: 1, Name: "system.example.io", Resources: []pie.Resource{
+				gadgetResource(), {Group: "billing.example.io", Name: "ledgers", Schema: "v1.ledgers.billing.example.io"},
+			}},
+		},
+		Schemas: []pie.Schema{
+			widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml"),
+			{Path: "pms/panels.yaml", Name: "v1.panels.ui.example.io", Group: "ui.example.io", Kind: "Panel", Plural: "panels"},
+		},
+		WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{
+			{Path: "root:pms", Name: "core.example.io"}, {Path: "root:pms", Name: "system.example.io"},
+		}}},
+	}
+	want := `| APIExport | kind | account |
+|---|---|:-:|
+| **core.example.io** | Widget | ● |
+|  | Panel · ui.example.io | ● |
+| **system.example.io** | Gadget · core.example.io | ● |
+|  | ledgers · billing.example.io · not in tree | ● |
+`
+	if got := string(pie.RenderSurface(model)); got != want {
+		t.Errorf("RenderSurface() =\n%s\nwant\n%s", got, want)
+	}
+}
+
 func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 	coreClaiming := func(claims ...pie.Claim) pie.Export {
 		return pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource(), gadgetResource()}, Claims: claims}
@@ -1687,7 +1717,7 @@ func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "an export's claims follow in its cell, grouped by verbs, narrowed ones selected, a long line broken at its groups",
+			name: "an export's claims follow its kinds, a row per set of verbs, narrowed ones selected",
 			model: pie.Model{
 				Exports: []pie.Export{coreClaiming(
 					pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}},
@@ -1699,12 +1729,37 @@ func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 			},
 			want: `| APIExport | kind | account |
 |---|---|:-:|
-| **core.example.io**<br/>grants: * on workspaces, apibindings;<br/>get, create on selected secrets | Widget | ● |
+| **core.example.io** | Widget | ● |
 |  | Gadget | ● |
+|  | grants: * on workspaces, apibindings | ● |
+|  | grants: get, create on selected secrets | ● |
 `,
 		},
 		{
-			name: "a binding file that accepts less says what it does not grant; WorkspaceTypes grant everything",
+			name: "a claimed resource that exports in the tree serve says which",
+			model: pie.Model{
+				Exports: []pie.Export{
+					coreClaiming(),
+					{Path: "pms/spare.yaml", Doc: 1, Name: "spare.example.io", Resources: []pie.Resource{gadgetResource()}},
+					{Path: "pms/terminal.yaml", Doc: 1, Name: "terminal.example.io", Claims: []pie.Claim{
+						{Group: "core.example.io", Resource: "widgets", Verbs: []string{"get"}},
+						{Resource: "secrets", Verbs: []string{"get"}},
+						{Group: "core.example.io", Resource: "gadgets", Verbs: []string{"get"}},
+					}},
+				},
+				Schemas: schemas,
+			},
+			want: `| APIExport | kind |
+|---|---|
+| **core.example.io** | Widget |
+|  | Gadget |
+| **spare.example.io** | Gadget · core.example.io |
+| **terminal.example.io** | (no kinds) |
+|  | grants: get on widgets from core.example.io, secrets,<br/>gadgets from core.example.io or spare.example.io |
+`,
+		},
+		{
+			name: "a binding file that accepts less says so on the claims it refuses; WorkspaceTypes grant everything",
 			model: pie.Model{
 				Exports: []pie.Export{coreClaiming(
 					pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}},
@@ -1714,15 +1769,16 @@ func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 				Schemas:        schemas,
 				WorkspaceTypes: account,
 				APIBindings: []pie.APIBinding{
-					bindingIn("pms/core.yaml", pie.GroupResource{Group: "tenancy.kcp.io", Resource: "workspaces"}),
-					bindingIn("features/x/core.yaml",
-						pie.GroupResource{Group: "tenancy.kcp.io", Resource: "workspaces"}, pie.GroupResource{Resource: "secrets"}, pie.GroupResource{Resource: "configmaps"}),
+					bindingIn("pms/core.yaml", pie.GroupResource{Group: "tenancy.kcp.io", Resource: "workspaces"}, pie.GroupResource{Resource: "secrets"}),
+					bindingIn("features/x/core.yaml"),
 				},
 			},
 			want: `| APIExport | kind | account | APIBindings in<br/>pms | APIBindings in<br/>features/<br/>x |
 |---|---|:-:|:-:|:-:|
-| **core.example.io**<br/>grants: * on workspaces; get on secrets, configmaps | Widget | ● | ●<br/>not secrets, configmaps | ● |
+| **core.example.io** | Widget | ● | ● | ● |
 |  | Gadget | ● | ● | ● |
+|  | grants: * on workspaces | ● | ● | ●<br/>not workspaces |
+|  | grants: get on secrets, configmaps | ● | ●<br/>not configmaps | ●<br/>not secrets, configmaps |
 `,
 		},
 	}
@@ -1736,7 +1792,6 @@ func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 }
 
 func TestRenderSurfaceKeepsGrantsLinesToSixtyCharacters(t *testing.T) {
-	a, b := strings.Repeat("a", 19), strings.Repeat("b", 19)
 	c, d := strings.Repeat("c", 22), strings.Repeat("d", 22)
 	tests := []struct {
 		name   string
@@ -1745,11 +1800,11 @@ func TestRenderSurfaceKeepsGrantsLinesToSixtyCharacters(t *testing.T) {
 	}{
 		{
 			name:   "sixty characters fit on one line",
-			claims: []pie.Claim{{Resource: a, Verbs: []string{"*"}}, {Resource: b, Verbs: []string{"get"}}},
-			want:   "grants: * on " + a + "; get on " + b,
+			claims: []pie.Claim{{Resource: strings.Repeat("a", 47), Verbs: []string{"*"}}},
+			want:   "grants: * on " + strings.Repeat("a", 47),
 		},
 		{
-			name:   "a group longer than sixty breaks after the word that reaches sixty",
+			name:   "a longer row breaks after the word that reaches sixty",
 			claims: []pie.Claim{{Resource: c, Verbs: []string{"*"}}, {Resource: d, Verbs: []string{"*"}}, {Resource: "e", Verbs: []string{"*"}}},
 			want:   "grants: * on " + c + ", " + d + ",<br/>e",
 		},
@@ -1760,34 +1815,163 @@ func TestRenderSurfaceKeepsGrantsLinesToSixtyCharacters(t *testing.T) {
 				Exports:        []pie.Export{{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Claims: tt.claims}},
 				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}}},
 			}
-			if got := string(pie.RenderSurface(model)); !strings.Contains(got, "| **core.example.io**<br/>"+tt.want+" |") {
-				t.Errorf("RenderSurface() =\n%s\nwant the export cell to end in\n%s", got, tt.want)
+			if got := string(pie.RenderSurface(model)); !strings.Contains(got, "|  | "+tt.want+" | ● |") {
+				t.Errorf("RenderSurface() =\n%s\nwant a row\n%s", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestRenderSurfaceD2(t *testing.T) {
+func TestRenderSurfaceD2DrawsTheTableAsAGridOfCells(t *testing.T) {
 	model := pie.Model{
-		Exports: []pie.Export{{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource()},
-			Claims: []pie.Claim{
-				{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}},
-				{Group: "tenancy.kcp.io", Resource: "workspacetypes", Verbs: []string{"*"}},
-				{Group: "apis.kcp.io", Resource: "apibindings", Verbs: []string{"*"}},
-				{Group: "apis.kcp.io", Resource: "apiexports", Verbs: []string{"*"}},
-				{Group: "", Resource: "secrets", Verbs: []string{"get", "create", "update", "delete"}, Selected: true},
-			}}},
-		Schemas:        []pie.Schema{widgetSchemaAt("pms/widgets.yaml")},
-		WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}}},
+		Exports: []pie.Export{{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource(), gadgetResource()},
+			Claims: []pie.Claim{{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}}}}},
+		Schemas: []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")},
+		WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account",
+			Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}, {Path: "root", Name: "tenancy.kcp.io"}}}},
+		APIBindings: []pie.APIBinding{{Path: "pms/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}}},
 	}
-	// Six lines of text: the header, and the core row with its wrapped grants, long enough to count once more.
-	want := "\"surface\": |`md\n" + `  | APIExport | kind | account |
-  |---|---|:-:|
-  | **core.example.io**<br/>grants: * on workspaces, workspacetypes, apibindings,<br/>apiexports;<br/>get, create, update, delete on selected secrets | Widget | ● |
-` + "`|\n" + `"surface".height: 232
+	want := `grid-rows: 5
+grid-columns: 4
+grid-gap: 0
+*.style.font-size: 14
+*.style.bold: false
+*.style.fill: "#ffffff"
+"r0c0": "APIExport" {style.bold: true; style.fill: "#e7ebf7"; label.near: center-left; height: 34}
+"r0c1": "kind" {style.bold: true; style.fill: "#e7ebf7"; label.near: center-left; height: 34}
+"r0c2": "account" {style.bold: true; style.fill: "#e7ebf7"; height: 34}
+"r0c3": "APIBindings in\npms" {style.bold: true; style.fill: "#e7ebf7"}
+"r1c0": "core.example.io" {style.bold: true; height: 34}
+"r1c1": "Widget" {label.near: center-left; height: 34}
+"r1c2": "●" {height: 34}
+"r1c3": "●" {height: 34}
+"r2c0": "" {height: 34}
+"r2c1": "Gadget" {label.near: center-left; height: 34}
+"r2c2": "●" {height: 34}
+"r2c3": "●" {height: 34}
+"r3c0": "" {height: 34}
+"r3c1": "grants: * on workspaces" {style.fill: "#e5dbff"; label.near: center-left; height: 34}
+"r3c2": "●" {height: 34}
+"r3c3": "●\nnot workspaces"
+"r4c0": "tenancy.kcp.io" {style.fill: "#f4f6fb"; style.bold: true; height: 34}
+"r4c1": "(outside the tree)" {style.fill: "#f4f6fb"; label.near: center-left; height: 34}
+"r4c2": "●" {style.fill: "#f4f6fb"; height: 34}
+"r4c3": "" {style.fill: "#f4f6fb"; height: 34}
+"legend": "grants that can write: a verb other than get, list, watch" {near: bottom-center; style.fill: "#e5dbff"; height: 34}
 `
 	if got := string(pie.RenderSurfaceD2(model)); got != want {
 		t.Errorf("RenderSurfaceD2() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestRenderSurfaceD2ShadesEveryOtherExportWhole(t *testing.T) {
+	export := func(name string, claims ...pie.Claim) pie.Export {
+		return pie.Export{Path: "pms/" + name + ".yaml", Doc: 1, Name: name, Claims: claims}
+	}
+	model := pie.Model{Exports: []pie.Export{
+		export("a.example.io"),
+		export("b.example.io", pie.Claim{Resource: "secrets", Verbs: []string{"get"}}),
+		export("c.example.io"),
+	}}
+	want := `"r1c0": "a.example.io" {style.bold: true; height: 34}
+"r1c1": "(no kinds)" {label.near: center-left; height: 34}
+"r2c0": "b.example.io" {style.fill: "#f4f6fb"; style.bold: true; height: 34}
+"r2c1": "(no kinds)" {style.fill: "#f4f6fb"; label.near: center-left; height: 34}
+"r3c0": "" {style.fill: "#f4f6fb"; height: 34}
+"r3c1": "grants: get on secrets" {style.fill: "#f4f6fb"; label.near: center-left; height: 34}
+"r4c0": "c.example.io" {style.bold: true; height: 34}
+"r4c1": "(no kinds)" {label.near: center-left; height: 34}
+`
+	if got := string(pie.RenderSurfaceD2(model)); !strings.HasSuffix(got, want) {
+		t.Errorf("RenderSurfaceD2() =\n%s\nwant it to end in\n%s", got, want)
+	}
+}
+
+// d2 centres every line of a label, so a claim that wraps is a cell of one-line children, each on the left.
+func TestRenderSurfaceD2KeepsTheLinesOfAWrappedClaimOnTheLeft(t *testing.T) {
+	c, d := strings.Repeat("c", 22), strings.Repeat("d", 22)
+	model := pie.Model{Exports: []pie.Export{
+		{Path: "pms/a.yaml", Doc: 1, Name: "a.example.io"},
+		{Path: "pms/b.yaml", Doc: 1, Name: "b.example.io", Claims: []pie.Claim{
+			{Resource: c, Verbs: []string{"*"}}, {Resource: d, Verbs: []string{"*"}}, {Resource: "e", Verbs: []string{"*"}},
+		}},
+	}}
+	line := `{style.stroke: transparent; style.fill: transparent; style.font-size: 14; style.bold: false; label.near: center-left; height: 20}`
+	want := `"r3c0": "" {style.fill: "#f4f6fb"; height: 34}
+"r3c1": "" {
+  style.fill: "#e5dbff"
+  grid-columns: 1
+  grid-gap: 0
+  "l0": "grants: * on ` + c + `, ` + d + `," ` + line + `
+  "l1": "e" ` + line + `
+}
+"legend": "grants that can write: a verb other than get, list, watch" {near: bottom-center; style.fill: "#e5dbff"; height: 34}
+`
+	if got := string(pie.RenderSurfaceD2(model)); !strings.HasSuffix(got, want) {
+		t.Errorf("RenderSurfaceD2() =\n%s\nwant it to end in\n%s", got, want)
+	}
+}
+
+func TestRenderSurfaceD2TintsTheClaimsThatCanWrite(t *testing.T) {
+	c, d := strings.Repeat("c", 22), strings.Repeat("d", 22)
+	readOnly := pie.Export{Path: "pms/a.yaml", Doc: 1, Name: "a.example.io", Claims: []pie.Claim{{Resource: "configmaps", Verbs: []string{"get", "list", "watch"}}}}
+	line := `{style.stroke: transparent; style.fill: transparent; style.font-size: 14; style.bold: false; label.near: center-left; height: 20}`
+	tests := []struct {
+		name    string
+		exports []pie.Export
+		want    string
+	}{
+		{
+			name: "a claim with any verb beyond get, list and watch is tinted in its own cell, over the shading, and the legend says why",
+			exports: []pie.Export{
+				{Path: "pms/a.yaml", Doc: 1, Name: "a.example.io", Claims: []pie.Claim{
+					{Resource: "configmaps", Verbs: []string{"get", "list", "watch"}},
+					{Resource: "secrets", Verbs: []string{"get", "create"}},
+				}},
+				{Path: "pms/b.yaml", Doc: 1, Name: "b.example.io", Claims: []pie.Claim{
+					{Resource: c, Verbs: []string{"*"}}, {Resource: d, Verbs: []string{"*"}}, {Resource: "e", Verbs: []string{"*"}},
+				}},
+			},
+			want: `"r2c1": "grants: get, list, watch on configmaps" {label.near: center-left; height: 34}
+"r3c0": "" {height: 34}
+"r3c1": "grants: get, create on secrets" {style.fill: "#e5dbff"; label.near: center-left; height: 34}
+"r4c0": "b.example.io" {style.fill: "#f4f6fb"; style.bold: true; height: 34}
+"r4c1": "(no kinds)" {style.fill: "#f4f6fb"; label.near: center-left; height: 34}
+"r5c0": "" {style.fill: "#f4f6fb"; height: 34}
+"r5c1": "" {
+  style.fill: "#e5dbff"
+  grid-columns: 1
+  grid-gap: 0
+  "l0": "grants: * on ` + c + `, ` + d + `," ` + line + `
+  "l1": "e" ` + line + `
+}
+"legend": "grants that can write: a verb other than get, list, watch" {near: bottom-center; style.fill: "#e5dbff"; height: 34}
+`,
+		},
+		{
+			name: "read-only claims keep the shading, wrapped or not, and need no legend",
+			exports: []pie.Export{readOnly, {Path: "pms/b.yaml", Doc: 1, Name: "b.example.io", Claims: []pie.Claim{
+				{Resource: c, Verbs: []string{"get", "list", "watch"}}, {Resource: d, Verbs: []string{"get", "list", "watch"}},
+			}}},
+			want: `"r3c0": "b.example.io" {style.fill: "#f4f6fb"; style.bold: true; height: 34}
+"r3c1": "(no kinds)" {style.fill: "#f4f6fb"; label.near: center-left; height: 34}
+"r4c0": "" {style.fill: "#f4f6fb"; height: 34}
+"r4c1": "" {
+  style.fill: "#f4f6fb"
+  grid-columns: 1
+  grid-gap: 0
+  "l0": "grants: get, list, watch on ` + c + `," ` + line + `
+  "l1": "` + d + `" ` + line + `
+}
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderSurfaceD2(pie.Model{Exports: tt.exports})); !strings.HasSuffix(got, tt.want) {
+				t.Errorf("RenderSurfaceD2() =\n%s\nwant it to end in\n%s", got, tt.want)
+			}
+		})
 	}
 }
 

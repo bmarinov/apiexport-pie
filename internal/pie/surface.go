@@ -11,17 +11,37 @@ import (
 // bound marks a use case that binds an export in the surface table.
 const bound = "●"
 
-// RenderSurface draws which use case gets which kinds, as a markdown table for docs: a row per kind,
-// grouped by the export that serves it, and a column per use case. A use case that binds an export
-// gets all its kinds, so each export reads as one block, the bundle a workspace takes or leaves.
-func RenderSurface(m Model) []byte {
+// surface is the table both renderings draw: a column per use case, and a block of rows per export.
+type surface struct {
+	columns [][]string
+	blocks  []surfaceBlock
+}
+
+// surfaceBlock is an export: its name, then a row per kind it serves and a row per set of claims.
+type surfaceBlock struct {
+	export string
+	rows   []surfaceRow
+}
+
+// surfaceRow is a kind or a set of claims, in one or more lines, with a cell per use case: bound or
+// empty, and on a claims row a line saying which of them a binding file does not grant. writes marks
+// claims with a verb beyond reading.
+type surfaceRow struct {
+	lines  []string
+	cells  [][]string
+	writes bool
+}
+
+// surfaceOf lays out which use case gets which kinds and grants which claims. A use case that binds
+// an export gets all of it, so each export reads as one block, the bundle a workspace takes or leaves.
+func surfaceOf(m Model) surface {
 	// useCase is a column. withheld says, per export, the claims a binding file does not accept;
 	// kcp accepts every claim of a WorkspaceType's bindings, so those columns have none.
 	type useCase struct {
-		name     string
 		exports  []string
-		withheld map[string][]string
+		withheld map[string][]GroupResource
 	}
+	var s surface
 	var cases []useCase
 	exportsOf := func(bindings []binding) []string {
 		var names []string
@@ -31,10 +51,11 @@ func RenderSurface(m Model) []byte {
 		return names
 	}
 	for _, t := range m.WorkspaceTypes {
-		cases = append(cases, useCase{name: t.Name, exports: exportsOf(bindingsOf(t, m.WorkspaceTypes))})
+		s.columns = append(s.columns, []string{t.Name})
+		cases = append(cases, useCase{exports: exportsOf(bindingsOf(t, m.WorkspaceTypes))})
 	}
 	for _, dir := range bindingsByDir(m.APIBindings) {
-		withheld := map[string][]string{}
+		withheld := map[string][]GroupResource{}
 		for _, bd := range dir.bound {
 			named := exportsNamed(bd.ref.Name, m.Exports)
 			if len(named) == 0 {
@@ -42,112 +63,158 @@ func RenderSurface(m Model) []byte {
 			}
 			accepts := firstBindingOf(bd.ref.Name, dir.dir, m.APIBindings).Accepts
 			for _, c := range named[0].Claims {
-				if !slices.Contains(accepts, GroupResource{Group: c.Group, Resource: c.Resource}) {
-					withheld[bd.ref.Name] = append(withheld[bd.ref.Name], c.Resource)
+				if gr := (GroupResource{Group: c.Group, Resource: c.Resource}); !slices.Contains(accepts, gr) {
+					withheld[bd.ref.Name] = append(withheld[bd.ref.Name], gr)
 				}
 			}
 		}
-		cases = append(cases, useCase{name: "APIBindings in<br/>" + strings.ReplaceAll(dir.dir, "/", "/<br/>"), exports: exportsOf(dir.bound), withheld: withheld})
+		s.columns = append(s.columns, append([]string{"APIBindings in"}, strings.SplitAfter(dir.dir, "/")...))
+		cases = append(cases, useCase{exports: exportsOf(dir.bound), withheld: withheld})
 	}
 
-	var b bytes.Buffer
-	header := []string{"APIExport", "kind"}
-	rule := []string{"---", "---"}
-	for _, c := range cases {
-		header = append(header, c.name)
-		rule = append(rule, ":-:")
-	}
-	b.WriteString("| " + strings.Join(header, " | ") + " |\n")
-	b.WriteString("|" + strings.Join(rule, "|") + "|\n")
-
-	// row draws one kind. The first row of an export names it and says what binding it grants; a
-	// binding file that grants less says so in its cell on that row.
-	row := func(export, kind string, claims []Claim, first bool) {
-		cells := []string{"", kind}
-		if first {
-			cells[0] = "**" + export + "**"
-			if len(claims) > 0 {
-				cells[0] += "<br/>" + grants(claims)
-			}
-		}
+	cellsOf := func(export string, claims []Claim) [][]string {
+		cells := make([][]string, 0, len(cases))
 		for _, c := range cases {
-			cell := ""
+			var cell, refused []string
 			if slices.Contains(c.exports, export) {
-				cell = bound
+				cell = append(cell, bound)
 			}
-			if withheld := c.withheld[export]; first && len(withheld) > 0 {
-				cell += "<br/>not " + strings.Join(withheld, ", ")
+			for _, claim := range claims {
+				if slices.Contains(c.withheld[export], GroupResource{Group: claim.Group, Resource: claim.Resource}) {
+					refused = append(refused, claim.Resource)
+				}
+			}
+			if len(refused) > 0 {
+				cell = append(cell, "not "+strings.Join(refused, ", "))
 			}
 			cells = append(cells, cell)
 		}
-		b.WriteString("| " + strings.Join(cells, " | ") + " |\n")
+		return cells
+	}
+	serving := exportsServing(m.Exports)
+	block := func(export string, kinds []string, claims []Claim) {
+		bl := surfaceBlock{export: export}
+		for _, kind := range kinds {
+			bl.rows = append(bl.rows, surfaceRow{lines: []string{kind}, cells: cellsOf(export, nil)})
+		}
+		for _, set := range claimSets(claims) {
+			bl.rows = append(bl.rows, surfaceRow{lines: set.grants(serving), cells: cellsOf(export, set.claims), writes: set.writes()})
+		}
+		s.blocks = append(s.blocks, bl)
 	}
 
-	// Copies of an export share its name and draw once, from the first.
+	// Copies of an export share its name and draw once, from the first. Exports are commonly named
+	// after their API group, so a kind names its group only when it is another one.
 	var drawn []string
-	serving := exportsServing(m.Exports)
 	for _, e := range m.Exports {
 		if slices.Contains(drawn, e.Name) {
 			continue
 		}
 		drawn = append(drawn, e.Name)
-		rows := rowsOf(e, m.Schemas, serving)
-		if len(rows) == 0 {
-			row(e.Name, "(no kinds)", e.Claims, true)
+		var kinds []string
+		for _, r := range rowsOf(e, m.Schemas, serving) {
+			kind := r.kind
+			if r.group != e.Name {
+				kind += " · " + r.group
+			}
+			if !r.inTree {
+				kind += " · not in tree"
+			}
+			kinds = append(kinds, kind)
 		}
-		for i, r := range rows {
-			row(e.Name, r.kind, e.Claims, i == 0)
+		if len(kinds) == 0 {
+			kinds = []string{"(no kinds)"}
 		}
+		block(e.Name, kinds, e.Claims)
 	}
 	for _, c := range cases {
 		for _, name := range c.exports {
 			if !slices.Contains(drawn, name) {
 				drawn = append(drawn, name)
-				row(name, "(outside the tree)", nil, true)
+				block(name, []string{"(outside the tree)"}, nil)
 			}
+		}
+	}
+	return s
+}
+
+// RenderSurface draws which use case gets which kinds as a markdown table for docs: a row per kind
+// and per set of claims, grouped by the export, and a column per use case.
+func RenderSurface(m Model) []byte {
+	s := surfaceOf(m)
+	var b bytes.Buffer
+	header := []string{"APIExport", "kind"}
+	rule := []string{"---", "---"}
+	for _, lines := range s.columns {
+		header = append(header, strings.Join(lines, "<br/>"))
+		rule = append(rule, ":-:")
+	}
+	b.WriteString("| " + strings.Join(header, " | ") + " |\n")
+	b.WriteString("|" + strings.Join(rule, "|") + "|\n")
+	for _, bl := range s.blocks {
+		for i, r := range bl.rows {
+			cells := []string{"", strings.Join(r.lines, "<br/>")}
+			if i == 0 {
+				cells[0] = "**" + bl.export + "**"
+			}
+			for _, lines := range r.cells {
+				cells = append(cells, strings.Join(lines, "<br/>"))
+			}
+			b.WriteString("| " + strings.Join(cells, " | ") + " |\n")
 		}
 	}
 	return b.Bytes()
 }
 
-// grantsWidth keeps the grants under an export narrow enough for its column. Longer ones break at
-// their verb groups, and a group still too long between its words.
-const grantsWidth = 60
+// claimSet is the claims of an export with the same verbs, one row of the surface.
+type claimSet struct {
+	verbs  string
+	claims []Claim
+}
 
-// grants tells what a binding lets the export's provider do, claims with the same verbs together:
-// "grants: * on workspaces, apibindings; get, create on selected secrets".
-func grants(claims []Claim) string {
-	var verbSets []string
-	on := map[string][]string{}
+func claimSets(claims []Claim) []claimSet {
+	var sets []claimSet
 	for _, c := range claims {
 		verbs := strings.Join(c.Verbs, ", ")
-		if _, ok := on[verbs]; !ok {
-			verbSets = append(verbSets, verbs)
+		i := slices.IndexFunc(sets, func(s claimSet) bool { return s.verbs == verbs })
+		if i < 0 {
+			sets = append(sets, claimSet{verbs: verbs})
+			i = len(sets) - 1
 		}
+		sets[i].claims = append(sets[i].claims, c)
+	}
+	return sets
+}
+
+// writes says whether the claims let the provider change anything: a verb other than get, list, watch.
+func (s claimSet) writes() bool {
+	for _, verb := range strings.Split(s.verbs, ", ") {
+		if !slices.Contains([]string{"get", "list", "watch"}, verb) {
+			return true
+		}
+	}
+	return false
+}
+
+// grantsWidth keeps a claims row narrow enough to sit beside the kinds. Longer ones break between
+// their words.
+const grantsWidth = 60
+
+// grants tells what a binding lets the export's provider do: "grants: get, create on selected secrets".
+// A resource that exports in the tree serve names them, since kcp ties such a claim to one of them.
+func (s claimSet) grants(serving map[string][]string) []string {
+	resources := make([]string, 0, len(s.claims))
+	for _, c := range s.claims {
 		resource := c.Resource
 		if c.Selected {
 			resource = "selected " + resource
 		}
-		on[verbs] = append(on[verbs], resource)
-	}
-	parts := make([]string, 0, len(verbSets))
-	for _, verbs := range verbSets {
-		parts = append(parts, verbs+" on "+strings.Join(on[verbs], ", "))
-	}
-	if whole := "grants: " + strings.Join(parts, "; "); utf8.RuneCountInString(whole) <= grantsWidth {
-		return whole
-	}
-	var lines []string
-	for i, part := range parts {
-		if i == 0 {
-			part = "grants: " + part
+		if from := serving[resourceName(Resource{Group: c.Group, Name: c.Resource})]; len(from) > 0 {
+			resource += " from " + strings.Join(from, " or ")
 		}
-		if i < len(parts)-1 {
-			part += ";"
-		}
-		lines = append(lines, wrapWords(part, grantsWidth)...)
+		resources = append(resources, resource)
 	}
-	return strings.Join(lines, "<br/>")
+	return wrapWords("grants: "+s.verbs+" on "+strings.Join(resources, ", "), grantsWidth)
 }
 
 func wrapWords(text string, width int) []string {
@@ -167,28 +234,92 @@ func wrapWords(text string, width int) []string {
 	return append(lines, line)
 }
 
-// d2 v0.6.9 measures markdown tables short and clips their last rows, so RenderSurfaceD2 sets the
-// box's height from an overestimate: a line per table row, one more per <br/> and per
-// surfaceWrapWidth characters. Too much only leaves blank space under the table.
+// The surface in d2 is a grid of cells, which d2 sizes to their text. A cell of one line gets a fixed
+// height, since d2 would draw it about twice as tall; a row still grows to its tallest cell. Every
+// other export is shaded so each reads as one block.
 const (
-	surfaceLineHeight = 32
-	surfaceMargin     = 40
-	surfaceWrapWidth  = 150
+	surfaceFontSize  = 14
+	surfaceRowHeight = 34
+	surfaceHeadFill  = "#e7ebf7"
+	surfaceShadeFill = "#f4f6fb"
+	// Claims that can write are violet: red and orange are kcp's verdicts, the blues are layout.
+	surfaceWriteFill = "#e5dbff"
+	// A claims row that wraps is a cell of one-line children, since d2 centres every line of a label.
+	surfaceLineHeight = 20
 )
 
 // RenderSurfaceD2 draws the surface table as d2, for d2 to turn into SVG or PNG.
 func RenderSurfaceD2(m Model) []byte {
+	s := surfaceOf(m)
 	var b bytes.Buffer
-	b.WriteString("\"surface\": |`md\n")
-	lines := 0
-	for _, line := range strings.Split(strings.TrimSuffix(string(RenderSurface(m)), "\n"), "\n") {
-		b.WriteString("  " + line + "\n")
-		if strings.HasPrefix(line, "|---") {
-			continue
-		}
-		lines += 1 + strings.Count(line, "<br/>") + utf8.RuneCountInString(line)/surfaceWrapWidth
+	rows := 1
+	for _, bl := range s.blocks {
+		rows += len(bl.rows)
 	}
-	b.WriteString("`|\n")
-	fmt.Fprintf(&b, "\"surface\".height: %d\n", surfaceMargin+surfaceLineHeight*lines)
+	fmt.Fprintf(&b, "grid-rows: %d\ngrid-columns: %d\ngrid-gap: 0\n", rows, 2+len(s.columns))
+	fmt.Fprintf(&b, "*.style.font-size: %d\n*.style.bold: false\n*.style.fill: \"#ffffff\"\n", surfaceFontSize)
+
+	const left = "label.near: center-left"
+	r := 0
+	cell := func(c int, lines []string, style ...string) {
+		if len(lines) <= 1 {
+			style = append(style, fmt.Sprintf("height: %d", surfaceRowHeight))
+		}
+		fmt.Fprintf(&b, "%q: %q", fmt.Sprintf("r%dc%d", r, c), strings.Join(lines, "\n"))
+		if len(style) > 0 {
+			b.WriteString(" {" + strings.Join(style, "; ") + "}")
+		}
+		b.WriteString("\n")
+	}
+
+	head := []string{"style.bold: true", fmt.Sprintf("style.fill: %q", surfaceHeadFill)}
+	cell(0, []string{"APIExport"}, slices.Concat(head, []string{left})...)
+	cell(1, []string{"kind"}, slices.Concat(head, []string{left})...)
+	for c, lines := range s.columns {
+		cell(2+c, lines, head...)
+	}
+	tinted := false
+	for i, bl := range s.blocks {
+		var shade []string
+		if i%2 == 1 {
+			shade = []string{fmt.Sprintf("style.fill: %q", surfaceShadeFill)}
+		}
+		for j, row := range bl.rows {
+			r++
+			fill := shade
+			if row.writes {
+				fill = []string{fmt.Sprintf("style.fill: %q", surfaceWriteFill)}
+				tinted = true
+			}
+			// d2's PNG export draws bold text wider than d2 measured it, so a name on the left would
+			// lose its first letter; centred, it spills evenly into the cell's padding.
+			if j == 0 {
+				cell(0, []string{bl.export}, slices.Concat(shade, []string{"style.bold: true"})...)
+			} else {
+				cell(0, nil, shade...)
+			}
+			if len(row.lines) <= 1 {
+				cell(1, row.lines, slices.Concat(fill, []string{left})...)
+			} else {
+				fmt.Fprintf(&b, "%q: \"\" {\n", fmt.Sprintf("r%dc1", r))
+				for _, style := range fill {
+					b.WriteString("  " + style + "\n")
+				}
+				b.WriteString("  grid-columns: 1\n  grid-gap: 0\n")
+				for k, line := range row.lines {
+					fmt.Fprintf(&b, "  %q: %q {style.stroke: transparent; style.fill: transparent; style.font-size: %d; style.bold: false; %s; height: %d}\n",
+						fmt.Sprintf("l%d", k), line, surfaceFontSize, left, surfaceLineHeight)
+				}
+				b.WriteString("}\n")
+			}
+			for c, lines := range row.cells {
+				cell(2+c, lines, shade...)
+			}
+		}
+	}
+	if tinted {
+		fmt.Fprintf(&b, "\"legend\": \"grants that can write: a verb other than get, list, watch\" {near: bottom-center; style.fill: %q; height: %d}\n",
+			surfaceWriteFill, surfaceRowHeight)
+	}
 	return b.Bytes()
 }
