@@ -4,4 +4,5 @@
 !go.mod
 !go.sum
 !README.md
+!MANUAL.md
 !/.gitignore

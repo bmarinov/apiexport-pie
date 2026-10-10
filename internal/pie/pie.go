@@ -21,6 +21,9 @@ type Export struct {
 	Name      string
 	Resources []Resource
 	Claims    []Claim
+	// IdentitySecret says the export names the secret its identity comes from. Without one kcp
+	// generates the identity, a new one in every installation, and with it the hash claims name.
+	IdentitySecret bool
 }
 
 // Claim is a permission claim: the export's provider asks every consumer for access to Resource
@@ -34,6 +37,9 @@ type Claim struct {
 	// FromExport says the claim names an APIExport's identity hash: the resource is served by that
 	// export, so only workspaces binding it have it. Without one, it is built into every workspace.
 	FromExport bool
+	// LiteralHash says the identity hash is written out in the manifest, not templated in when it
+	// is installed.
+	LiteralHash bool
 }
 
 // GroupResource names a resource by its group, empty for the core group, and its plural.
@@ -105,6 +111,11 @@ type WorkspaceType struct {
 	Name    string
 	Binds   []ExportRef
 	Extends []TypeRef
+	// Parents and Children are the types limitAllowedParents and limitAllowedChildren list: the
+	// workspaces of this type may sit only in those of Parents and hold only those of Children.
+	// Empty is no list, whether that is any type or none.
+	Parents  []TypeRef
+	Children []TypeRef
 }
 
 // ExportRef names an APIExport and the workspace path it lives in. An empty Path is the workspace

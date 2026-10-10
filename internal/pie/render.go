@@ -33,11 +33,14 @@ var (
 	bindsRefused       = relation{"refused", "use case", "APIExport", "conflicts", fmt.Sprintf("style.stroke: %q; style.stroke-width: 3", refusedFill)}
 	servesKind         = relation{"serves", "APIExport", "kind", "serves", `style.stroke: "#868e96"`}
 	claimsKind         = relation{"claims", "APIExport", "claimed kind", "claims", `style.stroke: "#7048e8"; style.stroke-dash: 4`}
-	claimsReach        = relation{"reaches", "APIExport", "what it claims", "claims, through its virtual workspace: read, write or all verbs", `style.stroke: "#7048e8"; style.stroke-dash: 4`}
+	// The overview weighs what a claim lets the provider do: the more verbs, the heavier the arrow.
+	claimsRead  = relation{"reads", "APIExport", "what it claims", "claims to read, through its virtual workspace", `style.stroke: "#7048e8"; style.stroke-dash: 4`}
+	claimsWrite = relation{"writes", "APIExport", "what it claims", "claims to write, through its virtual workspace", `style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4`}
+	claimsAll   = relation{"all-verbs", "APIExport", "what it claims", "claims all verbs, through its virtual workspace", `style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6`}
 )
 
 // relations is the order the legend lists them in.
-var relations = []relation{bindsByDefault, bindsThroughExtend, bindsByAPIBinding, bindsRefused, servesKind, claimsKind, claimsReach}
+var relations = []relation{bindsByDefault, bindsThroughExtend, bindsByAPIBinding, bindsRefused, servesKind, claimsKind, claimsRead, claimsWrite, claimsAll}
 
 // RenderD2 draws the model as d2 source: a table per WorkspaceType and per directory of APIBinding
 // files listing the exports they bind, a table per APIExport listing the kinds it serves, the
@@ -194,14 +197,15 @@ func RenderD2(m Model) []byte {
 	if sharedDrawn {
 		shared = "APIExport with a resource another export also serves"
 	}
-	writeLegend(&b, "bottom-left", drawn, shared)
+	writeLegend(&b, "bottom-left", drawn, "", shared)
 	return b.Bytes()
 }
 
-// writeLegend explains by example the relations drawn, in the order relations lists them, and what
-// orange means, unless shared is empty because nothing orange is drawn. Nothing drawn, no legend.
-// near is where the legend goes, outside the diagram.
-func writeLegend(b *bytes.Buffer, near string, drawn map[relation]bool, shared string) {
+// writeLegend explains by example the relations drawn, in the order relations lists them, then
+// samples, d2 lines of boxes to explain, and what orange means, unless shared is empty because
+// nothing orange is drawn. Nothing drawn, no legend. near is where the legend goes, outside the
+// diagram.
+func writeLegend(b *bytes.Buffer, near string, drawn map[relation]bool, samples, shared string) {
 	if len(drawn) == 0 && shared == "" {
 		return
 	}
@@ -213,6 +217,7 @@ func writeLegend(b *bytes.Buffer, near string, drawn map[relation]bool, shared s
 		from, to := r.key+":from", r.key+":to"
 		fmt.Fprintf(b, "  %q: %q\n  %q: %q\n  %q -> %q: %q {%s}\n", from, r.from, to, r.to, from, to, r.label, r.style)
 	}
+	b.WriteString(samples)
 	if shared != "" {
 		fmt.Fprintf(b, "  \"shared\": %q {style.fill: %q}\n", shared, sharedFill)
 	}

@@ -27,6 +27,8 @@ const overviewClasses = `classes: {
   group: {style: {fill: "#f1f3f5"; stroke: "#ced4da"; font-size: 15; border-radius: 6}}
   kind: {style: {fill: "#ffffff"; stroke: "#adb5bd"; font-size: 14; border-radius: 4}}
   export: {style: {fill: "#ffffff"; stroke: "#364fc7"; stroke-width: 2; font-size: 16; bold: true; border-radius: 6}}
+  story: {style: {fill: transparent; stroke: transparent; font-size: 13; bold: false; font-color: "#343a40"}}
+  workspace: {style: {fill: "#f8f9fa"; stroke: "#868e96"; font-size: 15; border-radius: 8}}
   outside: {style: {fill: transparent; stroke: "#868e96"; stroke-dash: 3; font-size: 14}}
   outside-export: {style: {fill: "#f8f9fa"; stroke: "#868e96"; stroke-dash: 3; font-size: 14; border-radius: 6}}
   workspacetype: {style: {fill: "#e7f5ff"; stroke: "#1971c2"; font-size: 15; border-radius: 6}}
@@ -35,6 +37,9 @@ const overviewClasses = `classes: {
   claimed-resource: {style: {fill: "#f8f9fa"; stroke: "#adb5bd"; stroke-dash: 3; font-size: 14; border-radius: 4; font-color: "#495057"}}
 }
 `
+
+// apiGroupSample is the legend's sample of a box in RESOURCES: an API group holding a kind.
+const apiGroupSample = "  \"api-group\": {\n    label: \"API group\"\n    class: group\n    \"kind\": \"kind\" {class: kind}\n  }\n"
 
 // kindGroup is the box of an API group in RESOURCES.
 type kindGroup struct {
@@ -78,54 +83,98 @@ var categoryLabels = map[string]string{
 }
 
 // RenderOverviewD2 draws the model as d2 source in columns, from left to right: RESOURCES, each kind
-// once in a box of its API group; APIEXPORTS, pointing at the kinds they serve and, dashed, at what
-// their claims reach; and BOUND AT, the WorkspaceTypes and directories of APIBinding files, pointing
-// at the exports they bind. A kind more than one export serves is orange, and what is claimed but
-// served by no export in the tree is dashed. Edges mean what they mean in RenderD2, and a legend
-// explains them.
+// once in a box of its API group; APIEXPORTS, in the box of the workspace they live in, pointing at
+// the kinds they serve and, dashed, at what their claims reach, the heavier the more verbs; and
+// BOUND AT, the WorkspaceTypes and directories of APIBinding files, pointing at the exports they
+// bind. A kind more than one export serves is orange, and what is claimed but served by no export in
+// the tree is dashed. Edges mean what they mean in RenderD2, and a legend explains them.
 func RenderOverviewD2(m Model) []byte {
-	var b bytes.Buffer
-	b.WriteString(dagreLayout)
-	// Edges point from BOUND AT to APIEXPORTS to RESOURCES; laid out to the left, the columns read
-	// in that order from right to left.
-	b.WriteString("direction: left\n")
-	b.WriteString(overviewClasses)
-	var places, edges, outside []string
-	drawn := map[relation]bool{}
+	return overviewOf(m).d2()
+}
+
+// overview is what the overview of a model draws, before it is written: the boxes of each column in
+// the order they are written, and the edges between them.
+type overview struct {
+	areas      []resourceArea
+	workspaces []string
+	exports    []exportBox
+	outside    []string
+	places     []placeBox
+	edges      []overviewEdge
+}
+
+// exportBox is an export in APIEXPORTS: its keys inside the column, its name, and its story.
+type exportBox struct {
+	keys  []string
+	label string
+	story []string
+}
+
+// placeBox is a use case in BOUND AT.
+type placeBox struct {
+	id, label, class string
+}
+
+// overviewEdge is an arrow between d2 paths, drawn in the style of its relation.
+type overviewEdge struct {
+	r               relation
+	from, to, label string
+}
+
+// overviewOf works out what the overview of m draws.
+func overviewOf(m Model) overview {
+	var o overview
 	edge := func(r relation, from, to, label string) {
-		drawn[r] = true
-		edges = append(edges, fmt.Sprintf("%s -> %s%s {%s}", from, to, label, r.style))
+		o.edges = append(o.edges, overviewEdge{r: r, from: from, to: to, label: label})
 	}
+
+	// An export stands in the box of its workspace when the references to it agree on one, as in
+	// RenderD2.
+	paths := exportPaths(m)
+	exportKeys := func(e Export) []string {
+		if p := paths[e.Name]; len(p) == 1 {
+			return []string{workspaceID(p[0]), exportID(e)}
+		}
+		return []string{exportID(e)}
+	}
+	exportAt := func(e Export) string { return d2Path(append([]string{exportsColumn}, exportKeys(e)...)...) }
 
 	for _, e := range m.Exports {
 		for _, r := range e.Resources {
-			edge(servesKind, d2Path(exportsColumn, exportID(e)), d2Path(resourcesColumn, "group:"+r.Group, resourceName(r)), "")
+			edge(servesKind, exportAt(e), d2Path(resourcesColumn, "group:"+r.Group, resourceName(r)), "")
 		}
 	}
-	areas := resourceAreasOf(m)
+	o.areas = resourceAreasOf(m)
 	for _, e := range m.Exports {
 		var reaches []string
 		covered := map[string]map[string]bool{}
+		weight := map[string]relation{}
 		for _, c := range e.Claims {
-			reach := reachOf(c)
+			r, reach := reachOf(c)
 			if covered[reach] == nil {
 				reaches = append(reaches, reach)
 				covered[reach] = map[string]bool{}
+				weight[reach] = r
 			}
 			covered[reach][resourceName(Resource{Group: c.Group, Name: c.Resource})] = true
 		}
 		for _, reach := range reaches {
-			for _, target := range claimTargets(areas, covered[reach]) {
-				edge(claimsReach, d2Path(exportsColumn, exportID(e)), target, fmt.Sprintf(": %q", reach))
+			for _, target := range claimTargets(o.areas, covered[reach]) {
+				edge(weight[reach], exportAt(e), target, reach)
 			}
 		}
 	}
 
 	resources := servedByExport(m.Exports, m.Schemas)
-	place := func(id, label, class string, bound []binding) {
-		places = append(places, fmt.Sprintf("  %q: %q {class: %s}\n", id, label, class))
+	// boundBy lists, by export name, the short names of the places binding it, for its box.
+	boundBy := map[string][]string{}
+	boundAt := func(id, label, name, class string, bound []binding) {
+		o.places = append(o.places, placeBox{id: id, label: label, class: class})
 		conflicts := conflictsAmong(bound, resources)
 		for _, bd := range bound {
+			if !slices.Contains(boundBy[bd.ref.Name], name) {
+				boundBy[bd.ref.Name] = append(boundBy[bd.ref.Name], name)
+			}
 			// The other exports alone keep the label short; the warning on stderr names the resources.
 			r, label := bd.relation, ""
 			var with []string
@@ -135,16 +184,16 @@ func RenderOverviewD2(m Model) []byte {
 				}
 			}
 			if len(with) > 0 {
-				r, label = bindsRefused, fmt.Sprintf(": %q", "conflicts with "+strings.Join(with, ", "))
+				r, label = bindsRefused, "conflicts with "+strings.Join(with, ", ")
 			}
 			var targets []string
 			for _, e := range exportsNamed(bd.ref.Name, m.Exports) {
-				targets = append(targets, d2Path(exportsColumn, exportID(e)))
+				targets = append(targets, exportAt(e))
 			}
 			if len(targets) == 0 {
 				box := bd.ref.Name + " @ " + workspaceOf(bd.ref)
-				if !slices.Contains(outside, box) {
-					outside = append(outside, box)
+				if !slices.Contains(o.outside, box) {
+					o.outside = append(o.outside, box)
 				}
 				targets = append(targets, d2Path(exportsColumn, outsideID, box))
 			}
@@ -153,22 +202,52 @@ func RenderOverviewD2(m Model) []byte {
 			}
 		}
 	}
-	typesNamed := countNames(m.WorkspaceTypes, func(t WorkspaceType) string { return t.Name })
-	for _, t := range m.WorkspaceTypes {
-		label := t.Name
-		if typesNamed[t.Name] > 1 {
-			label += " · " + location(t.Path, t.Doc)
-		}
-		place("workspacetype:"+location(t.Path, t.Doc), label, "workspacetype", bindingsOf(t, m.WorkspaceTypes))
+	for _, p := range placesOf(m) {
+		boundAt("workspacetype:"+location(p.t.Path, p.t.Doc), p.label, p.t.Name, "workspacetype", bindingsOf(p.t, m.WorkspaceTypes))
 	}
-	for _, dir := range bindingsByDir(m.APIBindings) {
-		place("apibindings:"+dir.dir, "APIBindings in "+dir.dir, "apibindings", dir.bound)
+	dirs := bindingsByDir(m.APIBindings)
+	names := shortDirNames(dirs)
+	for _, dir := range dirs {
+		boundAt("apibindings:"+dir.dir, "APIBindings in "+dir.dir, names[dir.dir], "apibindings", dir.bound)
 	}
 
+	for _, e := range m.Exports {
+		if p := paths[e.Name]; len(p) == 1 && !slices.Contains(o.workspaces, p[0]) {
+			o.workspaces = append(o.workspaces, p[0])
+		}
+	}
+	exportsCalled := countNames(m.Exports, func(e Export) string { return e.Name })
+	serving := exportsServing(m.Exports)
+	for _, e := range m.Exports {
+		label := e.Name
+		if exportsCalled[e.Name] > 1 {
+			label += " · " + location(e.Path, e.Doc)
+		}
+		// The story under the name: where the export is bound and what it needs of other exports,
+		// so the box reads without tracing arrows.
+		var story []string
+		if len(boundBy[e.Name]) > 0 {
+			story = append(story, "bound at "+strings.Join(boundBy[e.Name], ", "))
+		}
+		story = append(story, needsOf(e, serving)...)
+		o.exports = append(o.exports, exportBox{keys: exportKeys(e), label: label, story: story})
+	}
+	return o
+}
+
+// d2 writes the overview as d2 source.
+func (o overview) d2() []byte {
+	var b bytes.Buffer
+	b.WriteString(dagreLayout)
+	// Edges point from BOUND AT to APIEXPORTS to RESOURCES; laid out to the left, the columns read
+	// in that order from right to left.
+	b.WriteString("direction: left\n")
+	b.WriteString(overviewClasses)
+
 	shared := ""
-	if len(areas) > 0 {
+	if len(o.areas) > 0 {
 		openColumn(&b, resourcesColumn, "RESOURCES")
-		for _, a := range areas {
+		for _, a := range o.areas {
 			indent := "  "
 			if a.category != "" {
 				fmt.Fprintf(&b, "  %q: {\n    label: %q\n    class: claimed\n", a.category, categoryLabels[a.category])
@@ -185,35 +264,53 @@ func RenderOverviewD2(m Model) []byte {
 		}
 		b.WriteString("}\n")
 	}
-	if len(m.Exports) > 0 || len(outside) > 0 {
+	if len(o.exports) > 0 || len(o.outside) > 0 {
 		openColumn(&b, exportsColumn, "APIEXPORTS")
-		exportsCalled := countNames(m.Exports, func(e Export) string { return e.Name })
-		for _, e := range m.Exports {
-			label := e.Name
-			if exportsCalled[e.Name] > 1 {
-				label += " · " + location(e.Path, e.Doc)
-			}
-			fmt.Fprintf(&b, "  %q: %q {class: export}\n", exportID(e), label)
+		for _, ws := range o.workspaces {
+			fmt.Fprintf(&b, "  %q: %q {class: workspace}\n", workspaceID(ws), "Workspace "+ws)
 		}
-		if len(outside) > 0 {
+		for _, e := range o.exports {
+			if len(e.story) == 0 {
+				fmt.Fprintf(&b, "  %s: %q {class: export}\n", d2Path(e.keys...), e.label)
+				continue
+			}
+			// As a grid the box is laid out as one node; as a plain container dagre stretches it
+			// across the ranks of its edges.
+			fmt.Fprintf(&b, "  %s: {\n    label: %q\n    class: export\n    grid-columns: 1\n    \"story\": %q {class: story}\n  }\n",
+				d2Path(e.keys...), e.label, strings.Join(e.story, "\n"))
+		}
+		if len(o.outside) > 0 {
 			fmt.Fprintf(&b, "  %q: {\n    label: \"outside the tree\"\n    class: outside\n", outsideID)
-			for _, box := range outside {
+			for _, box := range o.outside {
 				fmt.Fprintf(&b, "    %q: {class: outside-export}\n", box)
 			}
 			b.WriteString("  }\n")
 		}
 		b.WriteString("}\n")
 	}
-	if len(places) > 0 {
+	if len(o.places) > 0 {
 		openColumn(&b, boundAtColumn, "BOUND AT")
-		b.WriteString(strings.Join(places, ""))
+		for _, p := range o.places {
+			fmt.Fprintf(&b, "  %q: %q {class: %s}\n", p.id, p.label, p.class)
+		}
 		b.WriteString("}\n")
 	}
-	for _, line := range edges {
-		b.WriteString(line + "\n")
+	drawn := map[relation]bool{}
+	for _, e := range o.edges {
+		drawn[e.r] = true
+		label := ""
+		if e.label != "" {
+			label = fmt.Sprintf(": %q", e.label)
+		}
+		fmt.Fprintf(&b, "%s -> %s%s {%s}\n", e.from, e.to, label, e.r.style)
+	}
+	// A sample box says once what every box in RESOURCES is, rather than each group's label.
+	samples := ""
+	if len(o.areas) > 0 {
+		samples = apiGroupSample
 	}
 	// Under the middle, the legend adds no width; at a corner it widens the diagram by its own.
-	writeLegend(&b, "bottom-center", drawn, shared)
+	writeLegend(&b, "bottom-center", drawn, samples, shared)
 	return b.Bytes()
 }
 
@@ -298,20 +395,71 @@ func writeGroup(b *bytes.Buffer, indent string, g kindGroup) bool {
 	return shared
 }
 
-// reachOf sums up what a claim lets the provider do, as its arrow says it: all verbs, write (a verb
-// other than get, list, watch) or read, and whether a selector narrows it to some objects.
-func reachOf(c Claim) string {
-	reach := "read"
+// reachOf sums up what a claim lets the provider do: the relation its arrow is drawn in, heavier
+// for more verbs, and its label: read or write (a verb other than get, list, watch), and selected
+// when a selector narrows it to some objects. The heaviest arrow, all verbs, needs no word for them.
+func reachOf(c Claim) (relation, string) {
+	r, words := claimsRead, []string{"read"}
 	switch {
 	case slices.Contains(c.Verbs, "*"):
-		reach = "all verbs"
+		r, words = claimsAll, nil
 	case canWrite(c.Verbs):
-		reach = "write"
+		r, words = claimsWrite, []string{"write"}
 	}
 	if c.Selected {
-		reach += " · selected"
+		words = append(words, "selected")
 	}
-	return reach
+	return r, strings.Join(words, " · ")
+}
+
+// needsOf says what an export claims of the kinds other exports in the tree serve, a line per
+// serving export and reach, in the order of the claims: "reads accountinfos from core".
+func needsOf(e Export, serving map[string][]string) []string {
+	type need struct {
+		server string
+		r      relation
+	}
+	var needs []need
+	claimed := map[need][]string{}
+	for _, c := range e.Claims {
+		r, _ := reachOf(c)
+		for _, server := range serving[resourceName(Resource{Group: c.Group, Name: c.Resource})] {
+			if server == e.Name {
+				continue
+			}
+			n := need{server, r}
+			if claimed[n] == nil {
+				needs = append(needs, n)
+			}
+			claimed[n] = append(claimed[n], c.Resource)
+		}
+	}
+	lines := make([]string, 0, len(needs))
+	for _, n := range needs {
+		lines = append(lines, fmt.Sprintf("%s %s from %s", needWords[n.r], strings.Join(claimed[n], ", "), n.server))
+	}
+	return lines
+}
+
+// needWords say what a claim lets the provider do, by the relation its arrow is drawn in.
+var needWords = map[relation]string{claimsRead: "reads", claimsWrite: "writes", claimsAll: "all verbs on"}
+
+// shortDirNames names each directory of APIBinding files by the shortest end of its path that no
+// other such directory shares, so a name means the same on every box: a/manifests, b/manifests.
+func shortDirNames(dirs []bindingDir) map[string]string {
+	names := map[string]string{}
+	for _, d := range dirs {
+		parts := strings.Split(d.dir, "/")
+		names[d.dir] = d.dir
+		for n := 1; n < len(parts); n++ {
+			end := strings.Join(parts[len(parts)-n:], "/")
+			if !slices.ContainsFunc(dirs, func(o bindingDir) bool { return o.dir != d.dir && (o.dir == end || strings.HasSuffix(o.dir, "/"+end)) }) {
+				names[d.dir] = end
+				break
+			}
+		}
+	}
+	return names
 }
 
 // claimTargets are what the arrows of claims on the resources in covered point at, in the order of

@@ -27,7 +27,7 @@ const (
 	exitUsage = 2
 )
 
-const usage = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --surface [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --diff [--surface [-o FILE]] A B"
+const usage = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --surface [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --diff [--surface [-o FILE]] A B"
 
 // styles are the ways to draw the diagram, by the name --style takes.
 var styles = map[string]func(pie.Model) []byte{"classic": pie.RenderD2, "overview": pie.RenderOverviewD2}
@@ -81,12 +81,33 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return write(ctx, "", pie.RenderDiff(before, after), stdout, stderr)
 	}
-	dir := flags.Arg(0)
+	tree := flags.Arg(0)
+	dir := tree
+	if *watching {
+		// --watch rereads files on disk; a commit does not change.
+		if info, err := os.Stat(tree); err != nil || !info.IsDir() {
+			report(stderr, "apiexport-pie: --watch follows a directory on disk; %s is not one", tree)
+			printUsage(stderr, flags)
+			return exitUsage
+		}
+	} else {
+		opened, cleanup, err := openTree(ctx, tree)
+		if err != nil {
+			report(stderr, "apiexport-pie: %s: %v", tree, err)
+			return exitError
+		}
+		defer func() {
+			if cleaned := cleanup(); cleaned != nil {
+				report(stderr, "apiexport-pie: %s: removing what was unpacked: %v", tree, cleaned)
+			}
+		}()
+		dir = opened
+	}
 
 	generate := func() ([]byte, []string, error) {
 		model, diags, err := pie.Scan(os.DirFS(dir))
 		if err != nil {
-			return nil, nil, fmt.Errorf("%s: %w", dir, err)
+			return nil, nil, fmt.Errorf("%s: %w", tree, err)
 		}
 		diags = append(diags, pie.Check(model)...)
 		var notes []string
@@ -190,7 +211,7 @@ func misuse(in invocation) string {
 	case in.diff && in.out != "" && !in.surface:
 		return "--diff writes FILE only with --surface; the list of changes goes to stdout"
 	case !in.diff && in.trees != 1:
-		return fmt.Sprintf("want one DIR, got %d", in.trees)
+		return fmt.Sprintf("want one TREE, got %d", in.trees)
 	case in.watching && in.out == "":
 		return "--watch needs -o FILE, the file d2 shows"
 	case in.watching && !strings.HasSuffix(in.out, ".d2"):

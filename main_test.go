@@ -56,7 +56,7 @@ metadata:
 spec: not-a-map
 `
 
-const usageLine = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --surface [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --diff [--surface [-o FILE]] A B"
+const usageLine = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --surface [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --diff [--surface [-o FILE]] A B"
 
 func TestDiffReadsTreesFromGit(t *testing.T) {
 	other := strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1)
@@ -151,6 +151,68 @@ func TestDiffReadsTreesFromGit(t *testing.T) {
 		said, found := strings.CutPrefix(stderr, "apiexport-pie: nope:manifests: git archive: ")
 		if code != 1 || stdout != "" || !found || !strings.Contains(said, "nope") {
 			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 1 and git's complaint about nope", code, stdout, stderr)
+		}
+	})
+}
+
+func TestOneTreeIsReadFromGitToo(t *testing.T) {
+	other := strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1)
+	feature := map[string]string{"ws/export.yaml": exportManifest, "ws/other.yaml": other, "ws/broken.yaml": brokenExportManifest}
+	newRepo := func(t *testing.T) string {
+		t.Helper()
+		repo := gitRepo(t, map[string]string{"manifests/ws/export.yaml": exportManifest, "README.md": "not a manifest"})
+		commitFiles(t, repo, "feature", map[string]string{"manifests/ws/other.yaml": other, "manifests/ws/broken.yaml": brokenExportManifest})
+		git(t, repo, "checkout", "-q", "main")
+		return repo
+	}
+	draw := func(t *testing.T, args ...string) (int, string, string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), args, &stdout, &stderr)
+		return code, stdout.String(), stderr.String()
+	}
+
+	t.Run("REF:PATH draws what the same files in a directory draw, in every style, and leaves no temporary files", func(t *testing.T) {
+		dir := writeTree(t, feature)
+		repo := newRepo(t)
+		t.Chdir(repo)
+		tmp := t.TempDir()
+		t.Setenv("TMPDIR", tmp)
+
+		for _, flags := range [][]string{nil, {"--style", "overview"}, {"--surface"}} {
+			wantCode, wantOut, wantErr := draw(t, append(flags, dir)...)
+			code, stdout, stderr := draw(t, append(flags, "feature:manifests")...)
+
+			if code != wantCode || stdout != wantOut || stderr != wantErr {
+				t.Errorf("run(%v feature:manifests) = %d\nstdout:\n%s\nstderr:\n%s\nwant what the directory gives: %d\nstdout:\n%s\nstderr:\n%s", flags, code, stdout, stderr, wantCode, wantOut, wantErr)
+			}
+		}
+		if left, err := os.ReadDir(tmp); err != nil || len(left) != 0 {
+			t.Errorf("after run() %s holds %v (%v), want nothing left", tmp, left, err)
+		}
+	})
+
+	t.Run("with REMOTE, it is fetched from a repository by path or URL", func(t *testing.T) {
+		dir := writeTree(t, feature)
+		repo := newRepo(t)
+		t.Chdir(t.TempDir())
+
+		_, wantOut, _ := draw(t, "--style", "overview", dir)
+		code, stdout, stderr := draw(t, "--style", "overview", "file://"+repo+"#feature:manifests")
+
+		if code != 0 || stdout != wantOut {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0 and what the directory gives:\n%s", code, stdout, stderr, wantOut)
+		}
+	})
+
+	t.Run("a ref that is not there exits 1 naming the tree", func(t *testing.T) {
+		repo := newRepo(t)
+		t.Chdir(repo)
+
+		code, stdout, stderr := draw(t, "--style", "overview", "nothing:manifests")
+
+		if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "apiexport-pie: nothing:manifests: ") {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 1 and an error naming nothing:manifests", code, stdout, stderr)
 		}
 	})
 }
@@ -490,8 +552,8 @@ spec:
 		args   []string
 		reason string
 	}{
-		{name: "without DIR", args: nil, reason: "want one DIR, got 0"},
-		{name: "with more than one DIR", args: []string{"a", "b"}, reason: "want one DIR, got 2"},
+		{name: "without TREE", args: nil, reason: "want one TREE, got 0"},
+		{name: "with more than one TREE", args: []string{"a", "b"}, reason: "want one TREE, got 2"},
 		{name: "with an unknown flag", args: []string{"-x", "a"}, reason: "flag provided but not defined: -x"},
 		{name: "with --watch but no -o", args: []string{"--watch", "a"}, reason: "--watch needs -o FILE, the file d2 shows"},
 		{name: "with --surface and --watch on a markdown FILE", args: []string{"--surface", "-o", "s.md", "--watch", "a"},
@@ -501,6 +563,10 @@ spec:
 		{name: "with --diff and one tree", args: []string{"--diff", "a"}, reason: "--diff wants A and B, got 1"},
 		{name: "with --diff and -o but no --surface", args: []string{"--diff", "-o", "pie.d2", "a", "b"},
 			reason: "--diff writes FILE only with --surface; the list of changes goes to stdout"},
+		{name: "with --watch on a tree that is no directory", args: []string{"-o", "pie.d2", "--watch", "main:manifests"},
+			reason: "--watch follows a directory on disk; main:manifests is not one"},
+		{name: "with --watch on a file", args: []string{"-o", "pie.d2", "--watch", "go.mod"},
+			reason: "--watch follows a directory on disk; go.mod is not one"},
 		{name: "with --diff and --watch", args: []string{"--diff", "--surface", "-o", "pie.d2", "--watch", "a", "b"},
 			reason: "--watch shows one tree; it does not go with --diff"},
 		{name: "with a --style there is none of", args: []string{"--style", "pie", "a"},
@@ -616,7 +682,7 @@ exit 1`)
 		}
 	})
 
-	t.Run("exits 1 naming DIR when it cannot be read", func(t *testing.T) {
+	t.Run("exits 1 naming TREE when it cannot be read", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "missing")
 		var stdout, stderr bytes.Buffer
 

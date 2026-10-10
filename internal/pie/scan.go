@@ -75,13 +75,16 @@ func isYAML(name string) bool {
 	return ext == ".yaml" || ext == ".yml"
 }
 
+// templateMark is the text a template action becomes where its value must stay a string.
+const templateMark = "tmpl"
+
 func cleanTemplates(data []byte) []byte {
 	data = templateLine.ReplaceAll(data, nil)
 	// A templated value would decode as nothing, but an identity hash says by being there that a
 	// claim is on an export's resource.
-	data = templateHash.ReplaceAll(data, []byte("${1}tmpl"))
+	data = templateHash.ReplaceAll(data, []byte("${1}"+templateMark))
 	data = templateValue.ReplaceAll(data, []byte("${1}null"))
-	return templateText.ReplaceAll(data, []byte("tmpl"))
+	return templateText.ReplaceAll(data, []byte(templateMark))
 }
 
 type scan struct {
@@ -240,13 +243,14 @@ func (s *scan) report(level Level, name string, n int, reason string) {
 }
 
 func exportFrom(file string, doc int, export apisv1alpha2.APIExport) Export {
-	e := Export{Path: file, Doc: doc, Name: export.Name}
+	e := Export{Path: file, Doc: doc, Name: export.Name, IdentitySecret: export.Spec.Identity != nil && export.Spec.Identity.SecretRef != nil}
 	for _, r := range export.Spec.Resources {
 		e.Resources = append(e.Resources, Resource{Group: r.Group, Name: r.Name, Schema: r.Schema})
 	}
 	for _, c := range export.Spec.PermissionClaims {
 		selected := c.DefaultSelector != nil && !c.DefaultSelector.MatchAll
-		e.Claims = append(e.Claims, Claim{Group: c.Group, Resource: c.Resource, Verbs: c.Verbs, Selected: selected, FromExport: c.IdentityHash != ""})
+		e.Claims = append(e.Claims, Claim{Group: c.Group, Resource: c.Resource, Verbs: c.Verbs, Selected: selected,
+			FromExport: c.IdentityHash != "", LiteralHash: c.IdentityHash != "" && c.IdentityHash != templateMark})
 	}
 	return e
 }
@@ -259,5 +263,18 @@ func workspaceTypeFrom(file string, doc int, wt tenancyv1alpha1.WorkspaceType) W
 	for _, ref := range wt.Spec.Extend.With {
 		t.Extends = append(t.Extends, TypeRef{Path: ref.Path, Name: string(ref.Name)})
 	}
+	t.Parents = typeRefsOf(wt.Spec.LimitAllowedParents)
+	t.Children = typeRefsOf(wt.Spec.LimitAllowedChildren)
 	return t
+}
+
+func typeRefsOf(selector *tenancyv1alpha1.WorkspaceTypeSelector) []TypeRef {
+	if selector == nil {
+		return nil
+	}
+	var refs []TypeRef
+	for _, ref := range selector.Types {
+		refs = append(refs, TypeRef{Path: ref.Path, Name: string(ref.Name)})
+	}
+	return refs
 }
