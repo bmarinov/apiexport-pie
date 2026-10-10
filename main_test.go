@@ -1,10 +1,12 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -54,7 +56,155 @@ metadata:
 spec: not-a-map
 `
 
-const usageLine = "usage: apiexport-pie [-v] [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --surface [-o FILE [--watch]] DIR"
+const usageLine = "usage: apiexport-pie [-v] [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --surface [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --diff [--surface [-o FILE]] A B"
+
+func TestDiffReadsTreesFromGit(t *testing.T) {
+	other := strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1)
+	newRepo := func(t *testing.T) string {
+		t.Helper()
+		repo := gitRepo(t, map[string]string{"manifests/ws/export.yaml": exportManifest, "README.md": "not a manifest"})
+		commitFiles(t, repo, "feature", map[string]string{"manifests/ws/other.yaml": other, "manifests/ws/broken.yaml": brokenExportManifest})
+		git(t, repo, "checkout", "-q", "main")
+		return repo
+	}
+	diff := func(t *testing.T, a, b string) (int, string, string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), []string{"--diff", a, b}, &stdout, &stderr)
+		return code, stdout.String(), stderr.String()
+	}
+	const added = "added: APIExport other.example.io\nadded: kind widgets.core.example.io in other.example.io\n"
+
+	t.Run("REF:PATH reads a commit of the repository it runs in, and leaves the checkout and no temporary files", func(t *testing.T) {
+		repo := newRepo(t)
+		t.Chdir(repo)
+		tmp := t.TempDir()
+		t.Setenv("TMPDIR", tmp)
+
+		code, stdout, stderr := diff(t, "main:manifests", "feature:manifests")
+
+		if left, err := os.ReadDir(tmp); err != nil || len(left) != 0 {
+			t.Errorf("after run() %s holds %v (%v), want nothing left", tmp, left, err)
+		}
+
+		if code != 0 || stdout != added || stderr != "warning: feature:manifests/ws/broken.yaml#1: "+strings.SplitN(stderr, ": ", 3)[2] {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0, stdout %q and a warning for feature:manifests/ws/broken.yaml#1", code, stdout, stderr, added)
+		}
+		if status := git(t, repo, "status", "--porcelain", "--branch"); status != "## main\n" {
+			t.Errorf("git status after run() =\n%s\nwant the main checkout, untouched", status)
+		}
+	})
+
+	t.Run("with REMOTE, a repository by path or URL is fetched from anywhere", func(t *testing.T) {
+		repo := newRepo(t)
+		t.Chdir(t.TempDir())
+
+		code, stdout, stderr := diff(t, repo+"#main:manifests", "file://"+repo+"#feature:manifests")
+
+		if code != 0 || stdout != added || !strings.HasPrefix(stderr, "warning: file://"+repo+"#feature:manifests/ws/broken.yaml#1: ") {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0, stdout %q and one warning", code, stdout, stderr, added)
+		}
+	})
+
+	t.Run("REMOTE can be a remote of the repository it runs in", func(t *testing.T) {
+		upstream := newRepo(t)
+		local := gitRepo(t, map[string]string{"README.md": "a clone"})
+		git(t, local, "remote", "add", "upstream", upstream)
+		t.Chdir(local)
+
+		code, stdout, stderr := diff(t, "upstream#main:manifests", "upstream#feature:manifests")
+
+		if code != 0 || stdout != added {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0 and stdout %q", code, stdout, stderr, added)
+		}
+	})
+
+	dir := writeTree(t, map[string]string{"ws/export.yaml": exportManifest})
+	for _, arg := range []string{"feature", ":manifests", filepath.Join(dir, "ws", "export.yaml")} {
+		t.Run("an argument that is no directory and no REF:PATH says so: "+filepath.Base(arg), func(t *testing.T) {
+			code, stdout, stderr := diff(t, dir, arg)
+
+			if want := "apiexport-pie: " + arg + ": not a directory, and not [REMOTE#]REF:PATH\n"; code != 1 || stdout != "" || stderr != want {
+				t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 1 and stderr %q", code, stdout, stderr, want)
+			}
+		})
+	}
+
+	t.Run("a ref the remote does not have says what git said", func(t *testing.T) {
+		repo := newRepo(t)
+		t.Chdir(t.TempDir())
+
+		code, stdout, stderr := diff(t, repo+"#main:manifests", repo+"#nope:manifests")
+
+		said, found := strings.CutPrefix(stderr, "apiexport-pie: "+repo+"#nope:manifests: git fetch: ")
+		if code != 1 || stdout != "" || !found || !strings.Contains(said, "nope") {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 1 and git's complaint about nope", code, stdout, stderr)
+		}
+	})
+
+	t.Run("a ref git does not know says what git said", func(t *testing.T) {
+		repo := newRepo(t)
+		t.Chdir(repo)
+
+		code, stdout, stderr := diff(t, "main:manifests", "nope:manifests")
+
+		said, found := strings.CutPrefix(stderr, "apiexport-pie: nope:manifests: git archive: ")
+		if code != 1 || stdout != "" || !found || !strings.Contains(said, "nope") {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 1 and git's complaint about nope", code, stdout, stderr)
+		}
+	})
+}
+
+func TestUnpackWritesOnlyRegularFilesInsideTheTree(t *testing.T) {
+	archiveOf := func(t *testing.T, headers ...tar.Header) *bytes.Buffer {
+		t.Helper()
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		for _, h := range headers {
+			body := ""
+			if h.Typeflag == tar.TypeReg {
+				body = "kind: x\n"
+				h.Size = int64(len(body))
+			}
+			if err := tw.WriteHeader(&h); err != nil {
+				t.Fatalf("writing header %s: %v", h.Name, err)
+			}
+			if _, err := tw.Write([]byte(body)); err != nil {
+				t.Fatalf("writing %s: %v", h.Name, err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatalf("closing the archive: %v", err)
+		}
+		return &buf
+	}
+
+	t.Run("files land under the tree, links are left out", func(t *testing.T) {
+		dir := t.TempDir()
+		err := unpack(archiveOf(t,
+			tar.Header{Name: "ws/export.yaml", Typeflag: tar.TypeReg, Mode: 0o644},
+			tar.Header{Name: "ws/link.yaml", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"},
+		), dir)
+
+		got, readErr := os.ReadFile(filepath.Join(dir, "ws", "export.yaml"))
+		_, linkErr := os.Lstat(filepath.Join(dir, "ws", "link.yaml"))
+		if err != nil || readErr != nil || string(got) != "kind: x\n" || !errors.Is(linkErr, os.ErrNotExist) {
+			t.Errorf("unpack() = %v; export.yaml %q (%v); link.yaml %v; want the file and no link", err, got, readErr, linkErr)
+		}
+	})
+
+	t.Run("an entry outside the tree stops it", func(t *testing.T) {
+		root := t.TempDir()
+		dir := filepath.Join(root, "tree")
+
+		err := unpack(archiveOf(t, tar.Header{Name: "../escaped.yaml", Typeflag: tar.TypeReg, Mode: 0o644}), dir)
+
+		_, statErr := os.Stat(filepath.Join(root, "escaped.yaml"))
+		if err == nil || !strings.Contains(err.Error(), "../escaped.yaml is outside the tree") || !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("unpack() = %v, escaped.yaml %v; want an error and nothing written outside", err, statErr)
+		}
+	})
+}
 
 func TestRun(t *testing.T) {
 	t.Run("prints the diagram of the manifests in DIR and nothing on stderr", func(t *testing.T) {
@@ -144,6 +294,80 @@ spec: {}
 			"notice: ws/export.yaml#1: APIExport core.example.io is bound by no WorkspaceType or APIBinding in the tree\n"
 		if code != 0 || stderr.String() != want {
 			t.Errorf("run() = %d\nstderr:\n%s\nwant 0 and stderr:\n%s", code, stderr.String(), want)
+		}
+	})
+
+	t.Run("with --diff prints what changed from A to B, and warnings of each with its tree", func(t *testing.T) {
+		a := writeTree(t, map[string]string{"ws/export.yaml": exportManifest})
+		b := writeTree(t, map[string]string{
+			"ws/other.yaml":  strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1),
+			"ws/broken.yaml": brokenExportManifest,
+			"types/security.yaml": `apiVersion: tenancy.kcp.io/v1alpha1
+kind: WorkspaceType
+metadata:
+  name: security
+spec: {}
+`,
+		})
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"--diff", a, b + "/"}, &stdout, &stderr)
+
+		want := "removed: APIExport core.example.io\nadded: APIExport other.example.io\nmoved: kind widgets.core.example.io from core.example.io to other.example.io\n"
+		if code != 0 || stdout.String() != want || !strings.HasPrefix(stderr.String(), "warning: "+b+"/ws/broken.yaml#1: ") || strings.Count(stderr.String(), "\n") != 1 {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0, stdout:\n%s\nand one warning for %s/ws/broken.yaml#1", code, stdout.String(), stderr.String(), want, b)
+		}
+	})
+
+	t.Run("with --diff --surface prints both tables as one in d2, or writes it to FILE", func(t *testing.T) {
+		a := writeTree(t, map[string]string{"ws/export.yaml": exportManifest})
+		b := writeTree(t, map[string]string{"ws/other.yaml": strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1)})
+		file := filepath.Join(t.TempDir(), "diff.d2")
+		var stdout, toFile, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"--diff", "--surface", a, b}, &stdout, &stderr)
+		fileCode := run(context.Background(), []string{"--diff", "--surface", "-o", file, a, b}, &toFile, &stderr)
+
+		written, err := os.ReadFile(file)
+		const moved = "widgets · core.example.io · not in tree · moved from core.example.io"
+		if code != 0 || !strings.HasPrefix(stdout.String(), "grid-rows: ") || !strings.Contains(stdout.String(), moved) || stderr.Len() != 0 {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0 and a d2 table with %q", code, stdout.String(), stderr.String(), moved)
+		}
+		if fileCode != 0 || err != nil || string(written) != stdout.String() || toFile.Len() != 0 {
+			t.Errorf("run() with -o = %d, %s holds\n%s\n(%v), stdout %q; want the same table in the file and nothing on stdout", fileCode, file, written, err, toFile.String())
+		}
+	})
+
+	t.Run("with --diff and -v also reports the documents each tree skipped, still no notices", func(t *testing.T) {
+		a := writeTree(t, map[string]string{
+			"ws/export.yaml":   exportManifest,
+			"ws/settings.yaml": configMapManifest,
+			"types/security.yaml": `apiVersion: tenancy.kcp.io/v1alpha1
+kind: WorkspaceType
+metadata:
+  name: security
+spec: {}
+`,
+		})
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"--diff", "-v", a, a}, &stdout, &stderr)
+
+		want := "skipped: " + a + "/ws/settings.yaml#1: v1 ConfigMap is not drawn\n"
+		if code != 0 || stdout.Len() != 0 || stderr.String() != want+want {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0, no changes, and twice:\n%s", code, stdout.String(), stderr.String(), want)
+		}
+	})
+
+	t.Run("with --diff and a tree that is not there says which and exits 1", func(t *testing.T) {
+		a := writeTree(t, map[string]string{"ws/export.yaml": exportManifest})
+		missing := filepath.Join(t.TempDir(), "missing")
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"--diff", a, missing}, &stdout, &stderr)
+
+		if code != 1 || stdout.Len() != 0 || !strings.HasPrefix(stderr.String(), "apiexport-pie: "+missing+": ") {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 1 and an error naming %s", code, stdout.String(), stderr.String(), missing)
 		}
 	})
 
@@ -250,6 +474,11 @@ spec:
 			reason: "--watch shows FILE in d2, so FILE must end in .d2"},
 		{name: "with --watch on an image FILE", args: []string{"-o", "pie.svg", "--watch", "a"},
 			reason: "--watch shows FILE in d2, so FILE must end in .d2"},
+		{name: "with --diff and one tree", args: []string{"--diff", "a"}, reason: "--diff wants A and B, got 1"},
+		{name: "with --diff and -o but no --surface", args: []string{"--diff", "-o", "pie.d2", "a", "b"},
+			reason: "--diff writes FILE only with --surface; the list of changes goes to stdout"},
+		{name: "with --diff and --watch", args: []string{"--diff", "--surface", "-o", "pie.d2", "--watch", "a", "b"},
+			reason: "--watch shows one tree; it does not go with --diff"},
 	}
 	for _, tt := range usageErrors {
 		t.Run("says why, prints usage and exits 2 "+tt.name, func(t *testing.T) {
@@ -397,6 +626,12 @@ func fakeD2(t *testing.T, script string) {
 func writeTree(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
+	writeFiles(t, root, files)
+	return root
+}
+
+func writeFiles(t *testing.T, root string, files map[string]string) {
+	t.Helper()
 	for name, content := range files {
 		path := filepath.Join(root, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -406,5 +641,39 @@ func writeTree(t *testing.T, files map[string]string) string {
 			t.Fatalf("writing fixture: %v", err)
 		}
 	}
-	return root
+}
+
+// gitRepo makes a repository whose main branch has one commit of files, and returns its directory.
+func gitRepo(t *testing.T, files map[string]string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("needs git on PATH")
+	}
+	repo := t.TempDir()
+	git(t, repo, "init", "-q", "-b", "main")
+	commitFiles(t, repo, "main", files)
+	return repo
+}
+
+// commitFiles commits files on branch, which starts from the current one if it is new.
+func commitFiles(t *testing.T, repo, branch string, files map[string]string) {
+	t.Helper()
+	git(t, repo, "checkout", "-q", "-B", branch)
+	writeFiles(t, repo, files)
+	git(t, repo, "add", "-A")
+	git(t, repo, "commit", "-q", "-m", "manifests")
+}
+
+// git runs git in dir, away from the user's own git configuration.
+func git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com", "GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return string(out)
 }

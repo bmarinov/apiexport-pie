@@ -363,7 +363,7 @@ spec:
 			want: pie.Model{Exports: []pie.Export{withClaims(widgetsOnly, pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}})}},
 		},
 		{
-			name: "so does an empty map",
+			name:     "so does an empty map",
 			manifest: strings.Replace(exportHead, "      crd: {}\n", "      {{- if .crd }}\n      crd: {}\n      {{- else }} {}\n      {{- end }}\n", 1),
 			want:     pie.Model{Exports: []pie.Export{widgetsOnly}},
 		},
@@ -1802,7 +1802,7 @@ func TestCheckPointsOutWhereClaimsReach(t *testing.T) {
 		{
 			name: "an export that claims what another serves names it, and that its consumers bind both",
 			model: pie.Model{
-				Exports:        []pie.Export{core, terminal},
+				Exports: []pie.Export{core, terminal},
 				WorkspaceTypes: []pie.WorkspaceType{
 					typeBinding("account", "terminal.example.io", "core.example.io"), typeBinding("org", "core.example.io", "terminal.example.io"), typeBinding("solo", "core.example.io"),
 				},
@@ -2273,6 +2273,295 @@ func TestRenderSurfaceD2TintsTheClaimsThatCanWrite(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRenderDiff(t *testing.T) {
+	export := func(path, name string) pie.Export {
+		return pie.Export{Path: path, Doc: 1, Name: name}
+	}
+	tests := []struct {
+		name string
+		a, b pie.Model
+		want string
+	}{
+		{
+			name: "the same exports, wherever their files are, are no change",
+			a:    pie.Model{Exports: []pie.Export{export("pms/core.yaml", "core.example.io")}},
+			b:    pie.Model{Exports: []pie.Export{export("moved/core.yaml", "core.example.io")}},
+		},
+		{
+			name: "exports only in A are removed, those only in B added, each once",
+			a: pie.Model{Exports: []pie.Export{
+				export("pms/core.yaml", "core.example.io"), export("pms/old.yaml", "old.example.io"),
+				export("test/old.yaml", "old.example.io"), export("pms/legacy.yaml", "legacy.example.io"),
+			}},
+			b: pie.Model{Exports: []pie.Export{
+				export("pms/new.yaml", "new.example.io"), export("pms/core.yaml", "core.example.io"), export("test/new.yaml", "new.example.io"),
+			}},
+			want: `removed: APIExport old.example.io
+removed: APIExport legacy.example.io
+added: APIExport new.example.io
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderDiff(tt.a, tt.b)); got != tt.want {
+				t.Errorf("RenderDiff() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderDiffFollowsKindsAcrossExports(t *testing.T) {
+	things := pie.Resource{Group: "old.example.io", Name: "things", Schema: "v1.things.old.example.io"}
+	gizmos := pie.Resource{Group: "core.example.io", Name: "gizmos", Schema: "v1.gizmos.core.example.io"}
+	gizmoSchema := pie.Schema{Path: "pms/gizmos.yaml", Name: "v1.gizmos.core.example.io", Group: "core.example.io", Kind: "Gizmo", Plural: "gizmos"}
+	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml"), gizmoSchema}
+	export := func(name string, resources ...pie.Resource) pie.Export {
+		return pie.Export{Path: "pms/" + name + ".yaml", Doc: 1, Name: name, Resources: resources}
+	}
+	tests := []struct {
+		name string
+		a, b pie.Model
+		want string
+	}{
+		{
+			name: "a kind that now sits in another export has moved",
+			a:    pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource(), gadgetResource())}},
+			b:    pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource()), export("fga.example.io", gadgetResource())}},
+			want: `added: APIExport fga.example.io
+moved: kind Gadget.core.example.io from core.example.io to fga.example.io
+`,
+		},
+		{
+			name: "a kind new to the tree is added in its export, one gone from it removed from its own",
+			a:    pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource()), export("old.example.io", things, gadgetResource())}},
+			b:    pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource(), gizmos)}},
+			want: `removed: APIExport old.example.io
+removed: kind things.old.example.io from old.example.io
+removed: kind Gadget.core.example.io from old.example.io
+added: kind Gizmo.core.example.io in core.example.io
+`,
+		},
+		{
+			name: "a kind one more export serves is added there, one fewer removed there",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{
+				export("core.example.io", widgetResource()), export("spare.example.io", widgetResource(), gadgetResource()),
+			}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{
+				export("core.example.io", widgetResource()), export("spare.example.io", gadgetResource()), export("extra.example.io", gadgetResource()),
+			}},
+			want: `added: APIExport extra.example.io
+removed: kind Widget.core.example.io from spare.example.io
+added: kind Gadget.core.example.io in extra.example.io
+`,
+		},
+		{
+			name: "a kind that several exports served moves from all of them, copies once",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{
+				export("a.example.io", widgetResource()), export("b.example.io", widgetResource()),
+				{Path: "test/a.yaml", Doc: 1, Name: "a.example.io", Resources: []pie.Resource{widgetResource()}},
+			}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{export("a.example.io"), export("b.example.io"), export("c.example.io", widgetResource())}},
+			want: `added: APIExport c.example.io
+moved: kind Widget.core.example.io from a.example.io and b.example.io to c.example.io
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderDiff(tt.a, tt.b)); got != tt.want {
+				t.Errorf("RenderDiff() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderSurfaceDiffD2(t *testing.T) {
+	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")}
+	export := func(name string, resources []pie.Resource, claims ...pie.Claim) pie.Export {
+		return pie.Export{Path: "pms/" + name + ".yaml", Doc: 1, Name: name, Resources: resources, Claims: claims}
+	}
+	typeBinding := func(name string, exports ...string) pie.WorkspaceType {
+		var refs []pie.ExportRef
+		for _, e := range exports {
+			refs = append(refs, pie.ExportRef{Path: "root:pms", Name: e})
+		}
+		return pie.WorkspaceType{Path: "types/" + name + ".yaml", Doc: 1, Name: name, Binds: refs}
+	}
+
+	t.Run("a kind that moved shows in both exports, and each use case says whether it still gets it", func(t *testing.T) {
+		a := pie.Model{Schemas: schemas,
+			Exports:        []pie.Export{export("core.example.io", []pie.Resource{widgetResource(), gadgetResource()})},
+			WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io"), typeBinding("org", "core.example.io"), typeBinding("legacy", "core.example.io")},
+		}
+		b := pie.Model{Schemas: schemas,
+			Exports: []pie.Export{export("core.example.io", []pie.Resource{widgetResource()}), export("fga.example.io", []pie.Resource{gadgetResource()})},
+			WorkspaceTypes: []pie.WorkspaceType{
+				typeBinding("account", "core.example.io", "fga.example.io"), typeBinding("org", "core.example.io"), typeBinding("team", "fga.example.io"),
+			},
+		}
+		want := `grid-rows: 4
+grid-columns: 6
+grid-gap: 0
+*.style.font-size: 14
+*.style.bold: false
+*.style.fill: "#ffffff"
+"r0c0": "APIExport" {style.bold: true; style.fill: "#e7ebf7"; label.near: center-left; height: 34}
+"r0c1": "kind" {style.bold: true; style.fill: "#e7ebf7"; label.near: center-left; height: 34}
+"r0c2": "account" {style.bold: true; style.fill: "#e7ebf7"; height: 34}
+"r0c3": "org" {style.bold: true; style.fill: "#e7ebf7"; height: 34}
+"r0c4": "team" {style.bold: true; style.fill: "#c5f6fa"; height: 34}
+"r0c5": "legacy" {style.bold: true; style.fill: "#eebefa"; height: 34}
+"r1c0": "core.example.io" {style.bold: true; height: 34}
+"r1c1": "Widget" {label.near: center-left; height: 34}
+"r1c2": "●" {height: 34}
+"r1c3": "●" {height: 34}
+"r1c4": "" {height: 34}
+"r1c5": "○" {style.fill: "#eebefa"; height: 34}
+"r2c0": "" {height: 34}
+"r2c1": "Gadget · moved to fga.example.io" {style.fill: "#eebefa"; label.near: center-left; height: 34}
+"r2c2": "" {height: 34}
+"r2c3": "" {height: 34}
+"r2c4": "" {height: 34}
+"r2c5": "" {height: 34}
+"r3c0": "fga.example.io" {style.fill: "#c5f6fa"; style.bold: true; height: 34}
+"r3c1": "Gadget · core.example.io · moved from core.example.io" {style.fill: "#c5f6fa"; label.near: center-left; height: 34}
+"r3c2": "●" {style.fill: "#f4f6fb"; height: 34}
+"r3c3": "○" {style.fill: "#eebefa"; height: 34}
+"r3c4": "+●" {style.fill: "#c5f6fa"; height: 34}
+"r3c5": "○" {style.fill: "#eebefa"; height: 34}
+"legend": "" {
+  near: bottom-center
+  grid-rows: 1
+  grid-gap: 12
+  style.stroke: transparent
+  style.fill: transparent
+  "added": "only in B, +● gained" {style.fill: "#c5f6fa"; style.font-size: 14; style.bold: false; height: 34}
+  "removed": "only in A, ○ lost" {style.fill: "#eebefa"; style.font-size: 14; style.bold: false; height: 34}
+}
+`
+		if got := string(pie.RenderSurfaceDiffD2(a, b)); got != want {
+			t.Errorf("RenderSurfaceDiffD2() =\n%s\nwant\n%s", got, want)
+		}
+	})
+
+	t.Run("an export gone with its kind and claims, claims that are new, and what a binding file refuses", func(t *testing.T) {
+		things := pie.Resource{Group: "old.example.io", Name: "things", Schema: "v1.things.old.example.io"}
+		a := pie.Model{Schemas: schemas,
+			Exports: []pie.Export{
+				export("core.example.io", []pie.Resource{widgetResource()}),
+				export("old.example.io", []pie.Resource{things}, pie.Claim{Resource: "secrets", Verbs: []string{"get"}}),
+			},
+			WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io", "old.example.io")},
+		}
+		b := pie.Model{Schemas: schemas,
+			Exports:        []pie.Export{export("core.example.io", []pie.Resource{widgetResource()}, pie.Claim{Resource: "configmaps", Verbs: []string{"get"}})},
+			WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io")},
+			APIBindings:    []pie.APIBinding{{Path: "pms/core-binding.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}}},
+		}
+		got := string(pie.RenderSurfaceDiffD2(a, b))
+		for _, line := range []string{
+			`"r0c3": "APIBindings in\npms" {style.bold: true; style.fill: "#c5f6fa"}`,
+			`"r1c3": "+●" {style.fill: "#c5f6fa"; height: 34}`,
+			`"r2c1": "grants: get on configmaps" {style.fill: "#c5f6fa"; label.near: center-left; height: 34}`,
+			`"r2c2": "+●" {style.fill: "#c5f6fa"; height: 34}`,
+			`"r2c3": "+●\nnot configmaps" {style.fill: "#c5f6fa"}`,
+			`"r3c0": "old.example.io" {style.fill: "#eebefa"; style.bold: true; height: 34}`,
+			`"r3c1": "things · not in tree" {style.fill: "#eebefa"; label.near: center-left; height: 34}`,
+			`"r3c2": "○" {style.fill: "#eebefa"; height: 34}`,
+			`"r4c1": "grants: get on secrets" {style.fill: "#eebefa"; label.near: center-left; height: 34}`,
+			`"r4c2": "○" {style.fill: "#eebefa"; height: 34}`,
+			`"r4c3": "" {style.fill: "#f4f6fb"; height: 34}`,
+		} {
+			if !strings.Contains(got, "\n"+line+"\n") {
+				t.Errorf("RenderSurfaceDiffD2() =\n%s\nwant a line\n%s", got, line)
+			}
+		}
+	})
+
+	t.Run("a kind one export more or fewer serves is no move, and a dot stays with the export bound", func(t *testing.T) {
+		writes := pie.Claim{Resource: "secrets", Verbs: []string{"*"}}
+		a := pie.Model{Schemas: schemas,
+			Exports: []pie.Export{
+				export("core.example.io", []pie.Resource{gadgetResource()}, writes),
+				export("spare.example.io", []pie.Resource{gadgetResource(), widgetResource()}),
+			},
+			WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io", "spare.example.io")},
+		}
+		b := pie.Model{Schemas: schemas,
+			Exports: []pie.Export{
+				export("core.example.io", []pie.Resource{gadgetResource(), widgetResource()}, writes),
+				export("spare.example.io", []pie.Resource{widgetResource()}),
+			},
+			WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io", "spare.example.io"), typeBinding("team", "core.example.io")},
+		}
+		got := string(pie.RenderSurfaceDiffD2(a, b))
+		for _, line := range []string{
+			`"r1c3": "+●" {style.fill: "#c5f6fa"; height: 34}`,
+			`"r2c1": "Widget" {style.fill: "#c5f6fa"; label.near: center-left; height: 34}`,
+			`"r2c2": "●" {height: 34}`,
+			`"r2c3": "+●" {style.fill: "#c5f6fa"; height: 34}`,
+			`"r3c1": "grants: * on secrets" {label.near: center-left; height: 34}`,
+			`"r4c1": "Widget · core.example.io" {style.fill: "#f4f6fb"; label.near: center-left; height: 34}`,
+			`"r4c3": "" {style.fill: "#f4f6fb"; height: 34}`,
+			`"r5c1": "Gadget · core.example.io" {style.fill: "#eebefa"; label.near: center-left; height: 34}`,
+			`"r5c2": "" {style.fill: "#f4f6fb"; height: 34}`,
+			`"r5c3": "" {style.fill: "#f4f6fb"; height: 34}`,
+		} {
+			if !strings.Contains(got, "\n"+line+"\n") {
+				t.Errorf("RenderSurfaceDiffD2() =\n%s\nwant a line\n%s", got, line)
+			}
+		}
+		if strings.Contains(got, "#e5dbff") {
+			t.Errorf("RenderSurfaceDiffD2() =\n%s\nwant no write tint in a diff", got)
+		}
+	})
+
+	t.Run("a kind gone for good is lost under the export each use case had bound", func(t *testing.T) {
+		gizmos := pie.Resource{Group: "core.example.io", Name: "gizmos", Schema: "v1.gizmos.core.example.io"}
+		types := []pie.WorkspaceType{typeBinding("account", "core.example.io"), typeBinding("team", "spare.example.io")}
+		a := pie.Model{Schemas: schemas, WorkspaceTypes: types, Exports: []pie.Export{
+			export("core.example.io", []pie.Resource{widgetResource(), gizmos}), export("spare.example.io", []pie.Resource{gadgetResource(), gizmos}),
+		}}
+		b := pie.Model{Schemas: schemas, WorkspaceTypes: types, Exports: []pie.Export{
+			export("core.example.io", []pie.Resource{widgetResource()}), export("spare.example.io", []pie.Resource{gadgetResource()}),
+		}}
+		got := string(pie.RenderSurfaceDiffD2(a, b))
+		for _, line := range []string{
+			`"r2c1": "gizmos · not in tree" {style.fill: "#eebefa"; label.near: center-left; height: 34}`,
+			`"r2c2": "○" {style.fill: "#eebefa"; height: 34}`,
+			`"r2c3": "" {height: 34}`,
+			`"r4c2": "" {style.fill: "#f4f6fb"; height: 34}`,
+			`"r4c3": "○" {style.fill: "#eebefa"; height: 34}`,
+		} {
+			if !strings.Contains(got, "\n"+line+"\n") {
+				t.Errorf("RenderSurfaceDiffD2() =\n%s\nwant a line\n%s", got, line)
+			}
+		}
+	})
+
+	t.Run("a use case that is new but binds nothing is a change too", func(t *testing.T) {
+		a := pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", []pie.Resource{widgetResource()})},
+			WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io")}}
+		b := a
+		b.WorkspaceTypes = append(slices.Clone(a.WorkspaceTypes), typeBinding("security"))
+
+		if got := string(pie.RenderSurfaceDiffD2(a, b)); !strings.Contains(got, `"r0c3": "security" {style.bold: true; style.fill: "#c5f6fa"; height: 34}`) || !strings.Contains(got, "\n\"legend\": ") {
+			t.Errorf("RenderSurfaceDiffD2() =\n%s\nwant security in cyan and the legend", got)
+		}
+	})
+
+	t.Run("a tree against itself is the plain table", func(t *testing.T) {
+		m := pie.Model{Schemas: schemas,
+			Exports:        []pie.Export{export("core.example.io", []pie.Resource{widgetResource(), gadgetResource()}, pie.Claim{Resource: "secrets", Verbs: []string{"get"}})},
+			WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io"), typeBinding("security")},
+		}
+		if got, want := string(pie.RenderSurfaceDiffD2(m, m)), string(pie.RenderSurfaceD2(m)); got != want {
+			t.Errorf("RenderSurfaceDiffD2(m, m) =\n%s\nwant RenderSurfaceD2(m)\n%s", got, want)
+		}
+	})
 }
 
 func TestRenderD2ExplainsTheRelationsItDraws(t *testing.T) {

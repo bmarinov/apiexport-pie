@@ -33,6 +33,20 @@ func TestDiagramRendersWithD2(t *testing.T) {
 	renderWithD2(t, diagram)
 }
 
+func TestSurfaceDiffIsDrawnByD2(t *testing.T) {
+	bin := buildBinary(t)
+	a := writeTree(t, map[string]string{"ws/export.yaml": exportManifest, "ws/widgets.yaml": schemaManifest})
+	b := writeTree(t, map[string]string{"ws/other.yaml": strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1), "ws/widgets.yaml": schemaManifest})
+	file := filepath.Join(t.TempDir(), "diff.svg")
+
+	if out, err := exec.CommandContext(t.Context(), bin, "--diff", "--surface", "-o", file, a, b).CombinedOutput(); err != nil {
+		t.Fatalf("apiexport-pie --diff --surface -o %s: %v\n%s", file, err, out)
+	}
+	if svg, err := os.ReadFile(file); err != nil || !bytes.Contains(svg, []byte("<svg")) {
+		t.Errorf("%s: want an SVG, read error %v", file, err)
+	}
+}
+
 func TestOutputToSVGIsDrawnByD2(t *testing.T) {
 	bin := buildBinary(t)
 	dir := writeTree(t, map[string]string{"ws/export.yaml": exportManifest, "ws/widgets.yaml": schemaManifest})

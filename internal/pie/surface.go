@@ -12,24 +12,47 @@ import (
 const bound = "●"
 
 // surface is the table both renderings draw: a column per use case, and a block of rows per export.
+// A diff of two surfaces is a surface too, whose parts say how they changed.
 type surface struct {
-	columns [][]string
+	columns []surfaceColumn
 	blocks  []surfaceBlock
+}
+
+// change says whether part of a diff of two surfaces is in both, or only in one of them.
+type change int
+
+const (
+	unchanged change = iota
+	added
+	removed
+)
+
+// surfaceColumn is a use case, by name and in the lines of its header.
+type surfaceColumn struct {
+	name   string
+	lines  []string
+	change change
 }
 
 // surfaceBlock is an export: its name, then a row per kind it serves and a row per set of claims.
 type surfaceBlock struct {
 	export string
 	rows   []surfaceRow
+	change change
 }
 
 // surfaceRow is a kind or a set of claims, in one or more lines, with a cell per use case: bound or
 // empty, and on a claims row a line saying which of them a binding file does not grant. writes marks
-// claims with a verb beyond reading.
+// claims with a verb beyond reading. key tells the row apart from the others of its export: the
+// resource of a kind, the grants of a set of claims.
 type surfaceRow struct {
-	lines  []string
-	cells  [][]string
-	writes bool
+	key         string
+	kind        bool
+	lines       []string
+	cells       [][]string
+	writes      bool
+	change      change
+	cellChanges []change
 }
 
 // surfaceOf lays out which use case gets which kinds and grants which claims. A use case that binds
@@ -38,7 +61,7 @@ func surfaceOf(m Model) surface {
 	var s surface
 	cases := useCasesOf(m)
 	for _, c := range cases {
-		s.columns = append(s.columns, c.column)
+		s.columns = append(s.columns, surfaceColumn{name: c.name, lines: c.column})
 	}
 
 	cellsOf := func(export string, claims []Claim) [][]string {
@@ -61,13 +84,15 @@ func surfaceOf(m Model) surface {
 		return cells
 	}
 	serving := exportsServing(m.Exports)
-	block := func(export string, kinds []string, claims []Claim) {
+	block := func(export string, kinds []surfaceRow, claims []Claim) {
 		bl := surfaceBlock{export: export}
-		for _, kind := range kinds {
-			bl.rows = append(bl.rows, surfaceRow{lines: []string{kind}, cells: cellsOf(export, nil)})
+		for _, r := range kinds {
+			r.cells = cellsOf(export, nil)
+			bl.rows = append(bl.rows, r)
 		}
 		for _, set := range claimSets(claims) {
-			bl.rows = append(bl.rows, surfaceRow{lines: set.grants(serving), cells: cellsOf(export, set.claims), writes: set.writes()})
+			lines := set.grants(serving)
+			bl.rows = append(bl.rows, surfaceRow{key: strings.Join(lines, " "), lines: lines, cells: cellsOf(export, set.claims), writes: set.writes()})
 		}
 		s.blocks = append(s.blocks, bl)
 	}
@@ -80,7 +105,7 @@ func surfaceOf(m Model) surface {
 			continue
 		}
 		drawn = append(drawn, e.Name)
-		var kinds []string
+		var kinds []surfaceRow
 		for _, r := range rowsOf(e, m.Schemas, serving) {
 			kind := r.kind
 			if r.group != e.Name {
@@ -89,10 +114,10 @@ func surfaceOf(m Model) surface {
 			if !r.inTree {
 				kind += " · not in tree"
 			}
-			kinds = append(kinds, kind)
+			kinds = append(kinds, surfaceRow{key: r.resource, kind: true, lines: []string{kind}})
 		}
 		if len(kinds) == 0 {
-			kinds = []string{"(no kinds)"}
+			kinds = []surfaceRow{{lines: []string{"(no kinds)"}}}
 		}
 		block(e.Name, kinds, e.Claims)
 	}
@@ -100,7 +125,7 @@ func surfaceOf(m Model) surface {
 		for _, name := range c.exports {
 			if !slices.Contains(drawn, name) {
 				drawn = append(drawn, name)
-				block(name, []string{"(outside the tree)"}, nil)
+				block(name, []surfaceRow{{lines: []string{"(outside the tree)"}}}, nil)
 			}
 		}
 	}
@@ -114,8 +139,8 @@ func RenderSurface(m Model) []byte {
 	var b bytes.Buffer
 	header := []string{"APIExport", "kind"}
 	rule := []string{"---", "---"}
-	for _, lines := range s.columns {
-		header = append(header, strings.Join(lines, "<br/>"))
+	for _, c := range s.columns {
+		header = append(header, strings.Join(c.lines, "<br/>"))
 		rule = append(rule, ":-:")
 	}
 	b.WriteString("| " + strings.Join(header, " | ") + " |\n")
@@ -228,7 +253,21 @@ const (
 
 // RenderSurfaceD2 draws the surface table as d2, for d2 to turn into SVG or PNG.
 func RenderSurfaceD2(m Model) []byte {
-	s := surfaceOf(m)
+	return renderSurfaceD2(surfaceOf(m))
+}
+
+// fillOf colours what a diff changed, and leaves anything else as it was.
+func fillOf(c change, otherwise []string) []string {
+	switch c {
+	case added:
+		return []string{fmt.Sprintf("style.fill: %q", surfaceAddedFill)}
+	case removed:
+		return []string{fmt.Sprintf("style.fill: %q", surfaceRemovedFill)}
+	}
+	return otherwise
+}
+
+func renderSurfaceD2(s surface) []byte {
 	var b bytes.Buffer
 	rows := 1
 	for _, bl := range s.blocks {
@@ -250,11 +289,14 @@ func RenderSurfaceD2(m Model) []byte {
 		b.WriteString("\n")
 	}
 
-	head := []string{"style.bold: true", fmt.Sprintf("style.fill: %q", surfaceHeadFill)}
+	headFill := []string{fmt.Sprintf("style.fill: %q", surfaceHeadFill)}
+	head := slices.Concat([]string{"style.bold: true"}, headFill)
 	cell(0, []string{"APIExport"}, slices.Concat(head, []string{left})...)
 	cell(1, []string{"kind"}, slices.Concat(head, []string{left})...)
-	for c, lines := range s.columns {
-		cell(2+c, lines, head...)
+	changed := false
+	for i, c := range s.columns {
+		cell(2+i, c.lines, slices.Concat([]string{"style.bold: true"}, fillOf(c.change, headFill))...)
+		changed = changed || c.change != unchanged
 	}
 	tinted := false
 	for i, bl := range s.blocks {
@@ -269,10 +311,12 @@ func RenderSurfaceD2(m Model) []byte {
 				fill = []string{fmt.Sprintf("style.fill: %q", surfaceWriteFill)}
 				tinted = true
 			}
+			fill = fillOf(row.change, fill)
+			changed = changed || row.change != unchanged || slices.ContainsFunc(row.cellChanges, func(c change) bool { return c != unchanged })
 			// d2's PNG export draws bold text wider than d2 measured it, so a name on the left would
 			// lose its first letter; centred, it spills evenly into the cell's padding.
 			if j == 0 {
-				cell(0, []string{bl.export}, slices.Concat(shade, []string{"style.bold: true"})...)
+				cell(0, []string{bl.export}, slices.Concat(fillOf(bl.change, shade), []string{"style.bold: true"})...)
 			} else {
 				cell(0, nil, shade...)
 			}
@@ -291,9 +335,23 @@ func RenderSurfaceD2(m Model) []byte {
 				b.WriteString("}\n")
 			}
 			for c, lines := range row.cells {
-				cell(2+c, lines, shade...)
+				cellChange := unchanged
+				if c < len(row.cellChanges) {
+					cellChange = row.cellChanges[c]
+				}
+				cell(2+c, lines, fillOf(cellChange, shade)...)
 			}
 		}
+	}
+	if changed {
+		b.WriteString("\"legend\": \"\" {\n  near: bottom-center\n  grid-rows: 1\n  grid-gap: 12\n  style.stroke: transparent\n  style.fill: transparent\n")
+		for _, swatch := range []struct{ key, label, fill string }{
+			{"added", "only in B, +● gained", surfaceAddedFill},
+			{"removed", "only in A, " + lost + " lost", surfaceRemovedFill},
+		} {
+			fmt.Fprintf(&b, "  %q: %q {style.fill: %q; style.font-size: %d; style.bold: false; height: %d}\n", swatch.key, swatch.label, swatch.fill, surfaceFontSize, surfaceRowHeight)
+		}
+		b.WriteString("}\n")
 	}
 	if tinted {
 		fmt.Fprintf(&b, "\"legend\": \"grants that can write: a verb other than get, list, watch\" {near: bottom-center; style.fill: %q; height: %d}\n",
