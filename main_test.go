@@ -56,7 +56,7 @@ metadata:
 spec: not-a-map
 `
 
-const usageLine = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --surface [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --diff [--surface [-o FILE]] A B"
+const usageLine = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --surface [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --diff [--surface|--style overview [-o FILE]] A B"
 
 func TestDiffReadsTreesFromGit(t *testing.T) {
 	other := strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1)
@@ -424,6 +424,25 @@ spec: {}
 		}
 	})
 
+	t.Run("with --diff --style overview prints both trees as one overview in d2, or writes it to FILE", func(t *testing.T) {
+		a := writeTree(t, map[string]string{"ws/export.yaml": exportManifest})
+		b := writeTree(t, map[string]string{"ws/export.yaml": exportManifest, "ws/other.yaml": strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1)})
+		file := filepath.Join(t.TempDir(), "diff.d2")
+		var stdout, toFile, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"--diff", "--style", "overview", a, b}, &stdout, &stderr)
+		fileCode := run(context.Background(), []string{"--diff", "--style", "overview", "-o", file, a, b}, &toFile, &stderr)
+
+		written, err := os.ReadFile(file)
+		const added = `"apiexport:other.example.io": "other.example.io" {class: export; style.stroke: "#1098ad"; style.fill: "#e3fafc"}`
+		if code != 0 || !strings.HasPrefix(stdout.String(), "vars: {") || !strings.Contains(stdout.String(), added) || stderr.Len() != 0 {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0 and an overview with %q", code, stdout.String(), stderr.String(), added)
+		}
+		if fileCode != 0 || err != nil || string(written) != stdout.String() || toFile.Len() != 0 {
+			t.Errorf("run() with -o = %d, %s holds\n%s\n(%v), stdout %q; want the same overview in the file and nothing on stdout", fileCode, file, written, err, toFile.String())
+		}
+	})
+
 	t.Run("with --diff and -v also reports the documents each tree skipped, still no notices", func(t *testing.T) {
 		a := writeTree(t, map[string]string{
 			"ws/export.yaml":   exportManifest,
@@ -562,7 +581,7 @@ spec:
 			reason: "--watch shows FILE in d2, so FILE must end in .d2"},
 		{name: "with --diff and one tree", args: []string{"--diff", "a"}, reason: "--diff wants A and B, got 1"},
 		{name: "with --diff and -o but no --surface", args: []string{"--diff", "-o", "pie.d2", "a", "b"},
-			reason: "--diff writes FILE only with --surface; the list of changes goes to stdout"},
+			reason: "--diff writes FILE only with --surface or --style overview; the list of changes goes to stdout"},
 		{name: "with --watch on a tree that is no directory", args: []string{"-o", "pie.d2", "--watch", "main:manifests"},
 			reason: "--watch follows a directory on disk; main:manifests is not one"},
 		{name: "with --watch on a file", args: []string{"-o", "pie.d2", "--watch", "go.mod"},
@@ -572,9 +591,9 @@ spec:
 		{name: "with a --style there is none of", args: []string{"--style", "pie", "a"},
 			reason: `--style is classic or overview, got "pie"`},
 		{name: "with --style and --surface", args: []string{"--style", "overview", "--surface", "a"},
-			reason: "--style picks how the diagram is drawn; it does not go with --surface or --diff"},
-		{name: "with --style and --diff", args: []string{"--style", "classic", "--diff", "a", "b"},
-			reason: "--style picks how the diagram is drawn; it does not go with --surface or --diff"},
+			reason: "--style picks how the diagram is drawn; it does not go with --surface"},
+		{name: "with --style classic and --diff", args: []string{"--style", "classic", "--diff", "a", "b"},
+			reason: "--diff is drawn as the overview only: --style overview"},
 	}
 	for _, tt := range usageErrors {
 		t.Run("says why, prints usage and exits 2 "+tt.name, func(t *testing.T) {

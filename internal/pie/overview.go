@@ -45,13 +45,16 @@ const apiGroupSample = "  \"api-group\": {\n    label: \"API group\"\n    class:
 type kindGroup struct {
 	group string
 	kinds []kindBox
+	in    presence
 }
 
 // kindBox is a kind an export in the tree serves or, when claimed is set, a resource exports claim
-// and none in the tree serves. shared says more than one export serves it.
+// and none in the tree serves. shared says more than one export serves it. name is the kind's, or
+// its plural when the tree has no schema for it.
 type kindBox struct {
-	resource, label string
-	shared, claimed bool
+	resource, name, label string
+	shared, claimed       bool
+	in                    presence
 }
 
 // resourceArea is a part of RESOURCES: the groups the tree serves or, under a category, the claimed
@@ -89,7 +92,7 @@ var categoryLabels = map[string]string{
 // bind. A kind more than one export serves is orange, and what is claimed but served by no export in
 // the tree is dashed. Edges mean what they mean in RenderD2, and a legend explains them.
 func RenderOverviewD2(m Model) []byte {
-	return overviewOf(m).d2()
+	return overviewOf(m, false).d2()
 }
 
 // overview is what the overview of a model draws, before it is written: the boxes of each column in
@@ -98,31 +101,61 @@ type overview struct {
 	areas      []resourceArea
 	workspaces []string
 	exports    []exportBox
-	outside    []string
+	outside    []outsideBox
 	places     []placeBox
 	edges      []overviewEdge
 }
 
-// exportBox is an export in APIEXPORTS: its keys inside the column, its name, and its story.
+// exportBox is an export in APIEXPORTS: its keys inside the column, its name, the places binding
+// it and what it needs of other exports.
 type exportBox struct {
 	keys  []string
 	label string
-	story []string
+	bound []placeRef
+	needs []string
+	in    presence
 }
 
-// placeBox is a use case in BOUND AT.
+// placeRef is a place binding an export, by its id in BOUND AT and its short name.
+type placeRef struct{ id, name string }
+
+// story is what the box says under the name: where the export is bound and what it needs of other
+// exports, so the box reads without tracing arrows.
+func (e exportBox) story() []string {
+	var story []string
+	if len(e.bound) > 0 {
+		names := make([]string, 0, len(e.bound))
+		for _, p := range e.bound {
+			names = append(names, p.name)
+		}
+		story = append(story, "bound at "+strings.Join(names, ", "))
+	}
+	return append(story, e.needs...)
+}
+
+// outsideBox is an export bound from outside the tree, named with the workspace it is bound from.
+type outsideBox struct {
+	name string
+	in   presence
+}
+
+// placeBox is a use case in BOUND AT. changes, in a diff, says which kinds a place both trees have
+// loses and gets.
 type placeBox struct {
-	id, label, class string
+	id, label, class, changes string
+	in                        presence
 }
 
 // overviewEdge is an arrow between d2 paths, drawn in the style of its relation.
 type overviewEdge struct {
 	r               relation
 	from, to, label string
+	in              presence
 }
 
-// overviewOf works out what the overview of m draws.
-func overviewOf(m Model) overview {
+// overviewOf works out what the overview of m draws. byName keys exports and WorkspaceTypes by name
+// rather than by where they are written, as a diff tells them apart; copies of one then share a box.
+func overviewOf(m Model, byName bool) overview {
 	var o overview
 	edge := func(r relation, from, to, label string) {
 		o.edges = append(o.edges, overviewEdge{r: r, from: from, to: to, label: label})
@@ -132,10 +165,14 @@ func overviewOf(m Model) overview {
 	// RenderD2.
 	paths := exportPaths(m)
 	exportKeys := func(e Export) []string {
-		if p := paths[e.Name]; len(p) == 1 {
-			return []string{workspaceID(p[0]), exportID(e)}
+		id := exportID(e)
+		if byName {
+			id = "apiexport:" + e.Name
 		}
-		return []string{exportID(e)}
+		if p := paths[e.Name]; len(p) == 1 {
+			return []string{workspaceID(p[0]), id}
+		}
+		return []string{id}
 	}
 	exportAt := func(e Export) string { return d2Path(append([]string{exportsColumn}, exportKeys(e)...)...) }
 
@@ -166,14 +203,14 @@ func overviewOf(m Model) overview {
 	}
 
 	resources := servedByExport(m.Exports, m.Schemas)
-	// boundBy lists, by export name, the short names of the places binding it, for its box.
-	boundBy := map[string][]string{}
+	// boundBy lists, by export name, the places binding it, for its box.
+	boundBy := map[string][]placeRef{}
 	boundAt := func(id, label, name, class string, bound []binding) {
 		o.places = append(o.places, placeBox{id: id, label: label, class: class})
 		conflicts := conflictsAmong(bound, resources)
 		for _, bd := range bound {
-			if !slices.Contains(boundBy[bd.ref.Name], name) {
-				boundBy[bd.ref.Name] = append(boundBy[bd.ref.Name], name)
+			if !slices.ContainsFunc(boundBy[bd.ref.Name], func(p placeRef) bool { return p.name == name }) {
+				boundBy[bd.ref.Name] = append(boundBy[bd.ref.Name], placeRef{id: id, name: name})
 			}
 			// The other exports alone keep the label short; the warning on stderr names the resources.
 			r, label := bd.relation, ""
@@ -192,8 +229,8 @@ func overviewOf(m Model) overview {
 			}
 			if len(targets) == 0 {
 				box := bd.ref.Name + " @ " + workspaceOf(bd.ref)
-				if !slices.Contains(o.outside, box) {
-					o.outside = append(o.outside, box)
+				if !slices.Contains(o.outside, outsideBox{name: box}) {
+					o.outside = append(o.outside, outsideBox{name: box})
 				}
 				targets = append(targets, d2Path(exportsColumn, outsideID, box))
 			}
@@ -203,7 +240,11 @@ func overviewOf(m Model) overview {
 		}
 	}
 	for _, p := range placesOf(m) {
-		boundAt("workspacetype:"+location(p.t.Path, p.t.Doc), p.label, p.t.Name, "workspacetype", bindingsOf(p.t, m.WorkspaceTypes))
+		id := "workspacetype:" + location(p.t.Path, p.t.Doc)
+		if byName {
+			id = "workspacetype:" + p.t.Name
+		}
+		boundAt(id, p.label, p.t.Name, "workspacetype", bindingsOf(p.t, m.WorkspaceTypes))
 	}
 	dirs := bindingsByDir(m.APIBindings)
 	names := shortDirNames(dirs)
@@ -220,17 +261,10 @@ func overviewOf(m Model) overview {
 	serving := exportsServing(m.Exports)
 	for _, e := range m.Exports {
 		label := e.Name
-		if exportsCalled[e.Name] > 1 {
+		if exportsCalled[e.Name] > 1 && !byName {
 			label += " · " + location(e.Path, e.Doc)
 		}
-		// The story under the name: where the export is bound and what it needs of other exports,
-		// so the box reads without tracing arrows.
-		var story []string
-		if len(boundBy[e.Name]) > 0 {
-			story = append(story, "bound at "+strings.Join(boundBy[e.Name], ", "))
-		}
-		story = append(story, needsOf(e, serving)...)
-		o.exports = append(o.exports, exportBox{keys: exportKeys(e), label: label, story: story})
+		o.exports = append(o.exports, exportBox{keys: exportKeys(e), label: label, bound: boundBy[e.Name], needs: needsOf(e, serving)})
 	}
 	return o
 }
@@ -248,13 +282,15 @@ func (o overview) d2() []byte {
 	if len(o.areas) > 0 {
 		openColumn(&b, resourcesColumn, "RESOURCES")
 		for _, a := range o.areas {
-			indent := "  "
+			indent, top := "  ", []string{resourcesColumn}
 			if a.category != "" {
 				fmt.Fprintf(&b, "  %q: {\n    label: %q\n    class: claimed\n", a.category, categoryLabels[a.category])
-				indent = "    "
+				indent, top = "    ", append(top, a.category)
 			}
 			for _, g := range a.groups {
-				if writeGroup(&b, indent, g) {
+				box := d2Path(append(slices.Clone(top), "group:"+g.group)...)
+				into := slices.ContainsFunc(o.edges, func(e overviewEdge) bool { return strings.HasPrefix(e.to, box+".") })
+				if writeGroup(&b, indent, g, into) {
 					shared = "kind more than one APIExport serves"
 				}
 			}
@@ -270,19 +306,20 @@ func (o overview) d2() []byte {
 			fmt.Fprintf(&b, "  %q: %q {class: workspace}\n", workspaceID(ws), "Workspace "+ws)
 		}
 		for _, e := range o.exports {
-			if len(e.story) == 0 {
-				fmt.Fprintf(&b, "  %s: %q {class: export}\n", d2Path(e.keys...), e.label)
+			story := e.story()
+			if len(story) == 0 {
+				fmt.Fprintf(&b, "  %s: %q {class: export%s}\n", d2Path(e.keys...), e.label, e.in.look())
 				continue
 			}
 			// As a grid the box is laid out as one node; as a plain container dagre stretches it
 			// across the ranks of its edges.
-			fmt.Fprintf(&b, "  %s: {\n    label: %q\n    class: export\n    grid-columns: 1\n    \"story\": %q {class: story}\n  }\n",
-				d2Path(e.keys...), e.label, strings.Join(e.story, "\n"))
+			fmt.Fprintf(&b, "  %s: {\n    label: %q\n    class: export\n%s    grid-columns: 1\n    \"story\": %q {class: story}\n  }\n",
+				d2Path(e.keys...), e.label, e.in.lines("    "), strings.Join(story, "\n"))
 		}
 		if len(o.outside) > 0 {
 			fmt.Fprintf(&b, "  %q: {\n    label: \"outside the tree\"\n    class: outside\n", outsideID)
 			for _, box := range o.outside {
-				fmt.Fprintf(&b, "    %q: {class: outside-export}\n", box)
+				fmt.Fprintf(&b, "    %q: {class: outside-export%s}\n", box.name, box.in.look())
 			}
 			b.WriteString("  }\n")
 		}
@@ -291,7 +328,11 @@ func (o overview) d2() []byte {
 	if len(o.places) > 0 {
 		openColumn(&b, boundAtColumn, "BOUND AT")
 		for _, p := range o.places {
-			fmt.Fprintf(&b, "  %q: %q {class: %s}\n", p.id, p.label, p.class)
+			label, look := p.label, p.in.look()
+			if p.changes != "" {
+				label, look = label+"\n"+p.changes, changedLook
+			}
+			fmt.Fprintf(&b, "  %q: %q {class: %s%s}\n", p.id, label, p.class, look)
 		}
 		b.WriteString("}\n")
 	}
@@ -302,12 +343,20 @@ func (o overview) d2() []byte {
 		if e.label != "" {
 			label = fmt.Sprintf(": %q", e.label)
 		}
-		fmt.Fprintf(&b, "%s -> %s%s {%s}\n", e.from, e.to, label, e.r.style)
+		fmt.Fprintf(&b, "%s -> %s%s {%s}\n", e.from, e.to, label, e.in.restroke(e.r))
 	}
 	// A sample box says once what every box in RESOURCES is, rather than each group's label.
 	samples := ""
 	if len(o.areas) > 0 {
 		samples = apiGroupSample
+	}
+	for _, p := range []presence{onlyInB, onlyInA} {
+		if o.draws(p) {
+			samples += fmt.Sprintf("  %q: %q {%s}\n", presenceKeys[p], presenceLabels[p], strings.TrimPrefix(p.look(), "; "))
+		}
+	}
+	if slices.ContainsFunc(o.places, func(p placeBox) bool { return p.changes != "" }) {
+		samples += fmt.Sprintf("  \"kinds-change\": \"a place whose kinds change\" {%s}\n", strings.TrimPrefix(changedLook, "; "))
 	}
 	// Under the middle, the legend adds no width; at a corner it widens the diagram by its own.
 	writeLegend(&b, "bottom-center", drawn, samples, shared)
@@ -339,11 +388,11 @@ func resourceAreasOf(m Model) []resourceArea {
 	for _, e := range m.Exports {
 		for _, r := range e.Resources {
 			name := resourceName(r)
-			label := r.Name + " · not in tree"
+			kind, label := r.Name, r.Name+" · not in tree"
 			if s, ok := schemaOf(r, path.Dir(e.Path), m.Schemas); ok {
-				label = s.Kind
+				kind, label = s.Kind, s.Kind
 			}
-			add("", r.Group, kindBox{resource: name, label: label, shared: len(serving[name]) > 1})
+			add("", r.Group, kindBox{resource: name, name: kind, label: label, shared: len(serving[name]) > 1})
 		}
 	}
 	for _, e := range m.Exports {
@@ -364,8 +413,9 @@ func resourceAreasOf(m Model) []resourceArea {
 }
 
 // writeGroup writes the box of an API group at indent, and says whether it holds an orange kind.
-// A box of claimed resources alone is dashed, and holds them in a row.
-func writeGroup(b *bytes.Buffer, indent string, g kindGroup) bool {
+// A box of claimed resources alone is dashed, and holds them in a row unless an arrow points into
+// it, at one of them alone.
+func writeGroup(b *bytes.Buffer, indent string, g kindGroup, into bool) bool {
 	label, class := g.group, "claimed"
 	if label == "" {
 		label = "core"
@@ -373,10 +423,11 @@ func writeGroup(b *bytes.Buffer, indent string, g kindGroup) bool {
 	if slices.ContainsFunc(g.kinds, func(k kindBox) bool { return !k.claimed }) {
 		class = "group"
 	}
-	fmt.Fprintf(b, "%s%q: {\n%s  label: %q\n%s  class: %s\n", indent, "group:"+g.group, indent, label, indent, class)
+	fmt.Fprintf(b, "%s%q: {\n%s  label: %q\n%s  class: %s\n%s", indent, "group:"+g.group, indent, label, indent, class, g.in.lines(indent+"  "))
 	// Claimed resources stand in a row: stacked, they made the diagram half again as tall. d2 draws
-	// arrows into a grid straight, which only the few to one claimed resource get.
-	if class == "claimed" {
+	// an arrow into a grid straight, across what is in the way, so a box an arrow points into
+	// stacks them and the arrow is routed.
+	if class == "claimed" && !into {
 		fmt.Fprintf(b, "%s  grid-rows: 1\n%s  grid-gap: 12\n", indent, indent)
 	}
 	shared := false
@@ -388,6 +439,12 @@ func writeGroup(b *bytes.Buffer, indent string, g kindGroup) bool {
 		case k.shared:
 			look += fmt.Sprintf("; style.fill: %q", sharedFill)
 			shared = true
+		}
+		// Orange says more than the fill of a diff; the stroke still tells which tree has the kind.
+		if k.shared && !k.claimed {
+			look += k.in.stroke()
+		} else {
+			look += k.in.look()
 		}
 		fmt.Fprintf(b, "%s  %q: %q {%s}\n", indent, k.resource, k.label, look)
 	}

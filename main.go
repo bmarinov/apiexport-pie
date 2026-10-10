@@ -27,7 +27,7 @@ const (
 	exitUsage = 2
 )
 
-const usage = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --surface [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --diff [--surface [-o FILE]] A B"
+const usage = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --surface [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --diff [--surface|--style overview [-o FILE]] A B"
 
 // styles are the ways to draw the diagram, by the name --style takes.
 var styles = map[string]func(pie.Model) []byte{"classic": pie.RenderD2, "overview": pie.RenderOverviewD2}
@@ -49,7 +49,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	out := flags.String("o", "", "write to `FILE` instead of stdout: d2 draws .svg, .png and .pdf; with --surface, .d2 gets the table as d2, other names markdown")
 	watching := flags.Bool("watch", false, "with -o: keep FILE up to date and show it with d2 --watch")
 	surface := flags.Bool("surface", false, "print a markdown table instead of the diagram: which workspaces get which kinds, and what they grant")
-	diff := flags.Bool("diff", false, "print what changes from tree A to tree B, a line per change; with --surface, both tables as one in d2")
+	diff := flags.Bool("diff", false, "print what changes from tree A to tree B, a line per change; with --surface, both tables as one in d2; with --style overview, both trees as one overview")
 	styleName := flags.String("style", "classic", "draw the diagram as `STYLE`: classic, a table per use case and export, or overview, exports in columns between what binds them")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -78,6 +78,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		if *surface {
 			return write(ctx, *out, pie.RenderSurfaceDiffD2(before, after), stdout, stderr)
+		}
+		if in.style == "overview" {
+			return write(ctx, *out, pie.RenderOverviewDiffD2(before, after), stdout, stderr)
 		}
 		return write(ctx, "", pie.RenderDiff(before, after), stdout, stderr)
 	}
@@ -208,8 +211,8 @@ func misuse(in invocation) string {
 		return fmt.Sprintf("--diff wants A and B, got %d", in.trees)
 	case in.diff && in.watching:
 		return "--watch shows one tree; it does not go with --diff"
-	case in.diff && in.out != "" && !in.surface:
-		return "--diff writes FILE only with --surface; the list of changes goes to stdout"
+	case in.diff && in.out != "" && !in.surface && in.style == "":
+		return "--diff writes FILE only with --surface or --style overview; the list of changes goes to stdout"
 	case !in.diff && in.trees != 1:
 		return fmt.Sprintf("want one TREE, got %d", in.trees)
 	case in.watching && in.out == "":
@@ -218,8 +221,10 @@ func misuse(in invocation) string {
 		return "--watch shows FILE in d2, so FILE must end in .d2"
 	case in.style != "" && styles[in.style] == nil:
 		return fmt.Sprintf("--style is classic or overview, got %q", in.style)
-	case in.style != "" && (in.surface || in.diff):
-		return "--style picks how the diagram is drawn; it does not go with --surface or --diff"
+	case in.style != "" && in.surface:
+		return "--style picks how the diagram is drawn; it does not go with --surface"
+	case in.style == "classic" && in.diff:
+		return "--diff is drawn as the overview only: --style overview"
 	}
 	return ""
 }

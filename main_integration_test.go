@@ -50,9 +50,15 @@ func TestSurfaceDiffIsDrawnByD2(t *testing.T) {
 func TestOutputToSVGIsDrawnByD2(t *testing.T) {
 	bin := buildBinary(t)
 	dir := writeTree(t, map[string]string{"ws/export.yaml": exportManifest, "ws/widgets.yaml": schemaManifest})
-	for _, args := range [][]string{{"-o"}, {"--style", "overview", "-o"}, {"--surface", "-o"}} {
+	for _, tt := range []struct{ flags, trees []string }{
+		{nil, []string{dir}},
+		{[]string{"--style", "overview"}, []string{dir}},
+		{[]string{"--surface"}, []string{dir}},
+		{[]string{"--diff", "--style", "overview"}, []string{dir, dir}},
+	} {
 		file := filepath.Join(t.TempDir(), "out.svg")
-		if out, err := exec.CommandContext(t.Context(), bin, append(args, file, dir)...).CombinedOutput(); err != nil {
+		args := append(append(tt.flags, "-o", file), tt.trees...)
+		if out, err := exec.CommandContext(t.Context(), bin, args...).CombinedOutput(); err != nil {
 			t.Fatalf("apiexport-pie %v: %v\n%s", args, err, out)
 		}
 		if svg, err := os.ReadFile(file); err != nil || !bytes.Contains(svg, []byte("<svg")) {
