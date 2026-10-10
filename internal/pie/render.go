@@ -31,11 +31,13 @@ var (
 	bindsThroughExtend = relation{"extend", "WorkspaceType", "APIExport", "binds through extend", `style.stroke: "#1971c2"; style.stroke-dash: 2`}
 	bindsByAPIBinding  = relation{"apibinding", "APIBinding file", "APIExport", "binds", `style.stroke: "#2f9e44"`}
 	bindsRefused       = relation{"refused", "use case", "APIExport", "conflicts", fmt.Sprintf("style.stroke: %q; style.stroke-width: 3", refusedFill)}
+	servesKind         = relation{"serves", "APIExport", "kind", "serves", `style.stroke: "#868e96"`}
 	claimsKind         = relation{"claims", "APIExport", "claimed kind", "claims", `style.stroke: "#7048e8"; style.stroke-dash: 4`}
+	claimsReach        = relation{"reaches", "APIExport", "what it claims", "claims, through its virtual workspace: read, write or all verbs", `style.stroke: "#7048e8"; style.stroke-dash: 4`}
 )
 
 // relations is the order the legend lists them in.
-var relations = []relation{bindsByDefault, bindsThroughExtend, bindsByAPIBinding, bindsRefused, claimsKind}
+var relations = []relation{bindsByDefault, bindsThroughExtend, bindsByAPIBinding, bindsRefused, servesKind, claimsKind, claimsReach}
 
 // RenderD2 draws the model as d2 source: a table per WorkspaceType and per directory of APIBinding
 // files listing the exports they bind, a table per APIExport listing the kinds it serves, the
@@ -188,21 +190,33 @@ func RenderD2(m Model) []byte {
 		b.WriteString(line + "\n")
 	}
 
-	if len(drawn) > 0 || sharedDrawn {
-		b.WriteString("\"legend\": {\n  label: \"Legend\"\n  near: bottom-left\n  style.stroke-dash: 2\n  style.fill: transparent\n  *.style.font-size: 12\n")
-		for _, r := range relations {
-			if !drawn[r] {
-				continue
-			}
-			from, to := r.key+":from", r.key+":to"
-			fmt.Fprintf(&b, "  %q: %q\n  %q: %q\n  %q -> %q: %q {%s}\n", from, r.from, to, r.to, from, to, r.label, r.style)
-		}
-		if sharedDrawn {
-			fmt.Fprintf(&b, "  \"shared\": \"APIExport with a resource another export also serves\" {style.fill: %q}\n", sharedFill)
-		}
-		b.WriteString("}\n")
+	shared := ""
+	if sharedDrawn {
+		shared = "APIExport with a resource another export also serves"
 	}
+	writeLegend(&b, "bottom-left", drawn, shared)
 	return b.Bytes()
+}
+
+// writeLegend explains by example the relations drawn, in the order relations lists them, and what
+// orange means, unless shared is empty because nothing orange is drawn. Nothing drawn, no legend.
+// near is where the legend goes, outside the diagram.
+func writeLegend(b *bytes.Buffer, near string, drawn map[relation]bool, shared string) {
+	if len(drawn) == 0 && shared == "" {
+		return
+	}
+	fmt.Fprintf(b, "\"legend\": {\n  label: \"Legend\"\n  near: %s\n  style.stroke-dash: 2\n  style.fill: transparent\n  *.style.font-size: 12\n", near)
+	for _, r := range relations {
+		if !drawn[r] {
+			continue
+		}
+		from, to := r.key+":from", r.key+":to"
+		fmt.Fprintf(b, "  %q: %q\n  %q: %q\n  %q -> %q: %q {%s}\n", from, r.from, to, r.to, from, to, r.label, r.style)
+	}
+	if shared != "" {
+		fmt.Fprintf(b, "  \"shared\": %q {style.fill: %q}\n", shared, sharedFill)
+	}
+	b.WriteString("}\n")
 }
 
 func exportID(e Export) string { return "apiexport:" + location(e.Path, e.Doc) }

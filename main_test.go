@@ -56,7 +56,7 @@ metadata:
 spec: not-a-map
 `
 
-const usageLine = "usage: apiexport-pie [-v] [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --surface [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --diff [--surface [-o FILE]] A B"
+const usageLine = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --surface [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --diff [--surface [-o FILE]] A B"
 
 func TestDiffReadsTreesFromGit(t *testing.T) {
 	other := strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1)
@@ -230,6 +230,30 @@ func TestRun(t *testing.T) {
 `
 		if code != 0 || stdout.String() != want || stderr.Len() != 0 {
 			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0 and stdout:\n%s", code, stdout.String(), stderr.String(), want)
+		}
+	})
+
+	t.Run("with --style overview prints the overview of the manifests in DIR", func(t *testing.T) {
+		dir := writeTree(t, map[string]string{"ws/export.yaml": exportManifest, "ws/widgets.yaml": schemaManifest})
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"--style", "overview", dir}, &stdout, &stderr)
+
+		want := "\"apiexports\": {\n  label: \"APIEXPORTS\"\n"
+		if code != 0 || !strings.Contains(stdout.String(), want) || stderr.Len() != 0 {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0 and stdout containing:\n%s", code, stdout.String(), stderr.String(), want)
+		}
+	})
+
+	t.Run("with --style classic prints what it prints without --style", func(t *testing.T) {
+		dir := writeTree(t, map[string]string{"ws/export.yaml": exportManifest, "ws/widgets.yaml": schemaManifest})
+		var classic, plain, stderr bytes.Buffer
+
+		styled := run(context.Background(), []string{"--style", "classic", dir}, &classic, &stderr)
+		unstyled := run(context.Background(), []string{dir}, &plain, &stderr)
+
+		if styled != 0 || unstyled != 0 || classic.String() != plain.String() || stderr.Len() != 0 {
+			t.Errorf("run() = %d and %d\nwith --style classic:\n%s\nwithout:\n%s\nstderr:\n%s\nwant 0, 0 and the same diagram", styled, unstyled, classic.String(), plain.String(), stderr.String())
 		}
 	})
 
@@ -479,6 +503,12 @@ spec:
 			reason: "--diff writes FILE only with --surface; the list of changes goes to stdout"},
 		{name: "with --diff and --watch", args: []string{"--diff", "--surface", "-o", "pie.d2", "--watch", "a", "b"},
 			reason: "--watch shows one tree; it does not go with --diff"},
+		{name: "with a --style there is none of", args: []string{"--style", "pie", "a"},
+			reason: `--style is classic or overview, got "pie"`},
+		{name: "with --style and --surface", args: []string{"--style", "overview", "--surface", "a"},
+			reason: "--style picks how the diagram is drawn; it does not go with --surface or --diff"},
+		{name: "with --style and --diff", args: []string{"--style", "classic", "--diff", "a", "b"},
+			reason: "--style picks how the diagram is drawn; it does not go with --surface or --diff"},
 	}
 	for _, tt := range usageErrors {
 		t.Run("says why, prints usage and exits 2 "+tt.name, func(t *testing.T) {

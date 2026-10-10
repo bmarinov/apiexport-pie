@@ -27,7 +27,10 @@ const (
 	exitUsage = 2
 )
 
-const usage = "usage: apiexport-pie [-v] [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --surface [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --diff [--surface [-o FILE]] A B"
+const usage = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --surface [-o FILE [--watch]] DIR\n       apiexport-pie [-v] --diff [--surface [-o FILE]] A B"
+
+// styles are the ways to draw the diagram, by the name --style takes.
+var styles = map[string]func(pie.Model) []byte{"classic": pie.RenderD2, "overview": pie.RenderOverviewD2}
 
 // pollInterval is how often --watch draws the diagram again.
 const pollInterval = time.Second
@@ -47,6 +50,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	watching := flags.Bool("watch", false, "with -o: keep FILE up to date and show it with d2 --watch")
 	surface := flags.Bool("surface", false, "print a markdown table instead of the diagram: which workspaces get which kinds, and what they grant")
 	diff := flags.Bool("diff", false, "print what changes from tree A to tree B, a line per change; with --surface, both tables as one in d2")
+	styleName := flags.String("style", "classic", "draw the diagram as `STYLE`: classic, a table per use case and export, or overview, exports in columns between what binds them")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printUsage(stdout, flags)
@@ -56,7 +60,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		printUsage(stderr, flags)
 		return exitUsage
 	}
-	if reason := misuse(invocation{trees: flags.NArg(), out: *out, watching: *watching, surface: *surface, diff: *diff}); reason != "" {
+	in := invocation{trees: flags.NArg(), out: *out, watching: *watching, surface: *surface, diff: *diff}
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "style" {
+			in.style = *styleName
+		}
+	})
+	if reason := misuse(in); reason != "" {
 		report(stderr, "apiexport-pie: %s", reason)
 		printUsage(stderr, flags)
 		return exitUsage
@@ -91,7 +101,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if *surface {
 			return pie.RenderSurface(model), notes, nil
 		}
-		return pie.RenderD2(model), notes, nil
+		return styles[*styleName](model), notes, nil
 	}
 
 	if *watching {
@@ -132,10 +142,11 @@ func write(ctx context.Context, out string, content []byte, stdout, stderr io.Wr
 	return exitOK
 }
 
-// invocation is what a command line asks for, as far as misuse can tell.
+// invocation is what a command line asks for, as far as misuse can tell. style is empty when
+// --style is not given.
 type invocation struct {
 	trees                   int
-	out                     string
+	out, style              string
 	watching, surface, diff bool
 }
 
@@ -184,6 +195,10 @@ func misuse(in invocation) string {
 		return "--watch needs -o FILE, the file d2 shows"
 	case in.watching && !strings.HasSuffix(in.out, ".d2"):
 		return "--watch shows FILE in d2, so FILE must end in .d2"
+	case in.style != "" && styles[in.style] == nil:
+		return fmt.Sprintf("--style is classic or overview, got %q", in.style)
+	case in.style != "" && (in.surface || in.diff):
+		return "--style picks how the diagram is drawn; it does not go with --surface or --diff"
 	}
 	return ""
 }

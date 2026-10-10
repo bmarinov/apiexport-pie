@@ -39,6 +39,7 @@ const templateAction = `\{\{(?:[^}]|\}[^}])*\}\}`
 // ("{{- else }} []"), or by a comment.
 var (
 	templateLine  = regexp.MustCompile(`(?m)^[ \t]*` + templateAction + `[ \t]*(?:\[\]|\{\}|#.*)?$`)
+	templateHash  = regexp.MustCompile(`(?m)(identityHash:[ \t]+)` + templateAction + `[ \t]*$`)
 	templateValue = regexp.MustCompile(`(?m)(:[ \t]+)` + templateAction + `[ \t]*$`)
 	templateText  = regexp.MustCompile(templateAction)
 
@@ -76,6 +77,9 @@ func isYAML(name string) bool {
 
 func cleanTemplates(data []byte) []byte {
 	data = templateLine.ReplaceAll(data, nil)
+	// A templated value would decode as nothing, but an identity hash says by being there that a
+	// claim is on an export's resource.
+	data = templateHash.ReplaceAll(data, []byte("${1}tmpl"))
 	data = templateValue.ReplaceAll(data, []byte("${1}null"))
 	return templateText.ReplaceAll(data, []byte("tmpl"))
 }
@@ -242,7 +246,7 @@ func exportFrom(file string, doc int, export apisv1alpha2.APIExport) Export {
 	}
 	for _, c := range export.Spec.PermissionClaims {
 		selected := c.DefaultSelector != nil && !c.DefaultSelector.MatchAll
-		e.Claims = append(e.Claims, Claim{Group: c.Group, Resource: c.Resource, Verbs: c.Verbs, Selected: selected})
+		e.Claims = append(e.Claims, Claim{Group: c.Group, Resource: c.Resource, Verbs: c.Verbs, Selected: selected, FromExport: c.IdentityHash != ""})
 	}
 	return e
 }

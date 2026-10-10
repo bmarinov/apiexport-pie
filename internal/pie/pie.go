@@ -31,6 +31,9 @@ type Claim struct {
 	Verbs    []string
 	// Selected says a default selector narrows the claim to some objects of the resource.
 	Selected bool
+	// FromExport says the claim names an APIExport's identity hash: the resource is served by that
+	// export, so only workspaces binding it have it. Without one, it is built into every workspace.
+	FromExport bool
 }
 
 // GroupResource names a resource by its group, empty for the core group, and its plural.
