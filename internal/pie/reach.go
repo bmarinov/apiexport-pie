@@ -14,10 +14,10 @@ func reachNotices(m Model, exports []Export) []Diagnostic {
 	notice := func(path string, doc int, format string, args ...any) {
 		diags = append(diags, noticeAt(path, doc, format, args...))
 	}
-	cases := useCasesOf(m)
+	consumers := consumersOf(m)
 	binding := func(names ...string) []string {
 		var where []string
-		for _, c := range cases {
+		for _, c := range consumers {
 			if !slices.ContainsFunc(names, func(name string) bool { return !slices.Contains(c.exports, name) }) {
 				where = append(where, c.name)
 			}
@@ -43,7 +43,7 @@ func reachNotices(m Model, exports []Export) []Diagnostic {
 	for _, e := range exports {
 		var where []string
 		granted := map[GroupResource]bool{}
-		for _, c := range cases {
+		for _, c := range consumers {
 			if !slices.Contains(c.exports, e.Name) {
 				continue
 			}
@@ -95,7 +95,7 @@ func reachNotices(m Model, exports []Export) []Diagnostic {
 		for _, server := range servers {
 			reason := fmt.Sprintf("APIExport %s claims %s from %s", e.Name, strings.Join(claimed[server], ", "), server)
 			var with, without []string
-			for _, c := range cases {
+			for _, c := range consumers {
 				switch {
 				case !slices.Contains(c.exports, e.Name):
 				case slices.Contains(c.exports, server):
@@ -121,7 +121,7 @@ func reachNotices(m Model, exports []Export) []Diagnostic {
 	return diags
 }
 
-// binds says that use cases bind: "account binds", "account and org bind".
+// binds says that consumers bind: "account binds", "account and org bind".
 func binds(names []string) string {
 	if len(names) == 1 {
 		return names[0] + " binds"

@@ -101,7 +101,7 @@ func (d Diagnostic) String() string {
 	return fmt.Sprintf("%s: %s#%d: %s", d.Level, d.Path, d.Doc, d.Reason)
 }
 
-// WorkspaceType is a use case: every workspace of this type binds the exports in Binds, and those
+// WorkspaceType is a consumer: every workspace of this type binds the exports in Binds, and those
 // of the types it Extends.
 type WorkspaceType struct {
 	// Path is the slash-separated manifest file, relative to the scanned tree, and Doc the
@@ -116,6 +116,9 @@ type WorkspaceType struct {
 	// Empty is no list, whether that is any type or none.
 	Parents  []TypeRef
 	Children []TypeRef
+	// Maintains says kcp keeps the default bindings in the type's existing workspaces too
+	// (defaultAPIBindingLifecycle Maintain); unset, it creates them only with a new workspace.
+	Maintains bool
 }
 
 // ExportRef names an APIExport and the workspace path it lives in. An empty Path is the workspace

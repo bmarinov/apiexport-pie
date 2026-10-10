@@ -10,15 +10,15 @@ import (
 const (
 	surfaceAddedFill   = "#c5f6fa"
 	surfaceRemovedFill = "#eebefa"
-	// lost marks a use case that no longer gets a row; a hollow dot tells it apart without colour.
+	// lost marks a consumer that no longer gets a row; a hollow dot tells it apart without colour.
 	lost = "○"
 )
 
 // RenderSurfaceDiffD2 draws the surfaces of a and b as one d2 table: the columns, exports and rows
 // of both, those only in b in cyan, those only in a in grape. A dot is where b binds the row's
-// export, +● when the use case did not get the row before. ○ marks a use case that had the row and
+// export, +● when the consumer did not get the row before. ○ marks a consumer that had the row and
 // gets it from no export now. A kind is followed by its resource, so one that moved to another export
-// shows in both and says where it went, and a use case that gets it through either export keeps its ●.
+// shows in both and says where it went, and a consumer that gets it through either export keeps its ●.
 func RenderSurfaceDiffD2(a, b Model) []byte {
 	return renderSurfaceD2(surfaceDiffOf(surfaceOf(a), surfaceOf(b)))
 }
@@ -38,7 +38,7 @@ func surfaceDiffOf(before, after surface) surface {
 		}
 	}
 
-	// A row's dots are its own export's, so a row only a has has none; whether a use case had or still
+	// A row's dots are its own export's, so a row only a has has none; whether a consumer had or still
 	// has a kind counts any export.
 	cellsFor := func(export string, r surfaceRow) ([][]string, []change) {
 		cells := make([][]string, len(d.columns))
@@ -140,7 +140,7 @@ func servedBy(s surface, key string) []string {
 	return exports
 }
 
-// cellOf is what a use case shows for a row in a surface, nil unless it gets the row through the
+// cellOf is what a consumer shows for a row in a surface, nil unless it gets the row through the
 // row's own export or, with anywhere, through any export that has the row.
 func cellOf(s surface, export string, r surfaceRow, column string, anywhere bool) []string {
 	col := slices.IndexFunc(s.columns, func(c surfaceColumn) bool { return c.name == column })

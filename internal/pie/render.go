@@ -8,11 +8,11 @@ import (
 )
 
 // elkLayout makes ELK the layout engine of the file itself, so every way of rendering it, d2 --watch
-// included, routes edges between use cases and exports at right angles. D2_LAYOUT and --layout
+// included, routes edges between consumers and exports at right angles. D2_LAYOUT and --layout
 // still win.
 const elkLayout = "vars: {\n  d2-config: {\n    layout-engine: elk\n  }\n}\n"
 
-// outsideID is the box holding exports that use cases bind but the tree does not define.
+// outsideID is the box holding exports that consumers bind but the tree does not define.
 const outsideID = "outside"
 
 // Header fills say what kcp makes of a table: orange is allowed but worth a look, red is refused.
@@ -30,7 +30,7 @@ var (
 	bindsByDefault     = relation{"default", "WorkspaceType", "APIExport", "binds by default", `style.stroke: "#1971c2"`}
 	bindsThroughExtend = relation{"extend", "WorkspaceType", "APIExport", "binds through extend", `style.stroke: "#1971c2"; style.stroke-dash: 2`}
 	bindsByAPIBinding  = relation{"apibinding", "APIBinding file", "APIExport", "binds", `style.stroke: "#2f9e44"`}
-	bindsRefused       = relation{"refused", "use case", "APIExport", "conflicts", fmt.Sprintf("style.stroke: %q; style.stroke-width: 3", refusedFill)}
+	bindsRefused       = relation{"refused", "consumer", "APIExport", "conflicts", fmt.Sprintf("style.stroke: %q; style.stroke-width: 3", refusedFill)}
 	servesKind         = relation{"serves", "APIExport", "kind", "serves", `style.stroke: "#868e96"`}
 	claimsKind         = relation{"claims", "APIExport", "claimed kind", "claims", `style.stroke: "#7048e8"; style.stroke-dash: 4`}
 	// The overview weighs what a claim lets the provider do: the more verbs, the heavier the arrow.
@@ -85,9 +85,9 @@ func RenderD2(m Model) []byte {
 
 	resources := servedByExport(m.Exports, m.Schemas)
 
-	// useCase draws the table of exports a use case binds. Bindings kcp refuses together turn the
+	// consumerTable draws the table of exports a consumer binds. Bindings kcp refuses together turn the
 	// table red, and their rows say what they conflict with.
-	useCase := func(id, label string, bound []binding) {
+	consumerTable := func(id, label string, bound []binding) {
 		conflicts := conflictsAmong(bound, resources)
 		fmt.Fprintf(&b, "%q: {\n  shape: sql_table\n  label: %q\n", id, label)
 		if len(conflicts) > 0 {
@@ -113,10 +113,10 @@ func RenderD2(m Model) []byte {
 
 	typesNamed := countNames(m.WorkspaceTypes, func(t WorkspaceType) string { return t.Name })
 	for _, t := range m.WorkspaceTypes {
-		useCase("workspacetype:"+location(t.Path, t.Doc), typeLabel(t, typesNamed[t.Name] > 1, m.WorkspaceTypes, m.Workspaces), bindingsOf(t, m.WorkspaceTypes))
+		consumerTable("workspacetype:"+location(t.Path, t.Doc), typeLabel(t, typesNamed[t.Name] > 1, m.WorkspaceTypes, m.Workspaces), bindingsOf(t, m.WorkspaceTypes))
 	}
 	for _, dir := range bindingsByDir(m.APIBindings) {
-		useCase("apibindings:"+dir.dir, "APIBindings in "+dir.dir, dir.bound)
+		consumerTable("apibindings:"+dir.dir, "APIBindings in "+dir.dir, dir.bound)
 	}
 
 	var workspaces []string
@@ -258,7 +258,7 @@ func countNames[T any](items []T, name func(T) string) map[string]int {
 }
 
 // typeLabel names a WorkspaceType, the types it extends, and the workspaces in the tree of its type,
-// which are how readers know a use case: root:orgs is the orgs workspace, of type orgs.
+// which are how readers know a consumer: root:orgs is the orgs workspace, of type orgs.
 func typeLabel(t WorkspaceType, repeated bool, types []WorkspaceType, workspaces []Workspace) string {
 	label := "WorkspaceType " + t.Name
 	if repeated {

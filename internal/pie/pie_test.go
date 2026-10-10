@@ -179,6 +179,29 @@ func TestScan(t *testing.T) {
 			}}},
 		},
 		{
+			name: "records whether kcp keeps a WorkspaceType's default bindings in its existing workspaces too (Maintain); unset is InitializeOnly",
+			fsys: fstest.MapFS{
+				"init.yaml": manifest(t, func() *tenancyv1alpha1.WorkspaceType {
+					wt := workspaceType("init", nil, nil)
+					mode := tenancyv1alpha1.APIBindingLifecycleModeInitializeOnly
+					wt.Spec.DefaultAPIBindingLifecycle = &mode
+					return wt
+				}()),
+				"maintain.yaml": manifest(t, func() *tenancyv1alpha1.WorkspaceType {
+					wt := workspaceType("maintain", nil, nil)
+					mode := tenancyv1alpha1.APIBindingLifecycleModeMaintain
+					wt.Spec.DefaultAPIBindingLifecycle = &mode
+					return wt
+				}()),
+				"unset.yaml": manifest(t, workspaceType("unset", nil, nil)),
+			},
+			want: pie.Model{WorkspaceTypes: []pie.WorkspaceType{
+				{Path: "init.yaml", Doc: 1, Name: "init"},
+				{Path: "maintain.yaml", Doc: 1, Name: "maintain", Maintains: true},
+				{Path: "unset.yaml", Doc: 1, Name: "unset"},
+			}},
+		},
+		{
 			name: "finds the types a WorkspaceType's workspaces may sit in and hold; none listed is none",
 			fsys: fstest.MapFS{
 				"types.yaml": manifest(t, func() *tenancyv1alpha1.WorkspaceType {
@@ -784,7 +807,7 @@ func TestRenderD2(t *testing.T) {
 	}
 }
 
-func TestRenderD2DrawsUseCases(t *testing.T) {
+func TestRenderD2DrawsConsumers(t *testing.T) {
 	coreHere := pie.Export{Path: "pms/export.yaml", Doc: 1, Name: "core.example.io"}
 	coreTable := `"workspace:root:pms": {
   label: "Workspace root:pms"
@@ -1776,7 +1799,7 @@ func TestCheckPointsOutWhereClaimsReach(t *testing.T) {
 		want  []string
 	}{
 		{
-			name: "two exports a use case binds together that claim the same resources, at the second",
+			name: "two exports a consumer binds together that claim the same resources, at the second",
 			model: pie.Model{
 				Exports: []pie.Export{
 					export("a.example.io", nil, claim("tenancy.kcp.io", "workspaces", "get"), claim("", "secrets", "get"), claim("", "configmaps", "get")),
@@ -1943,7 +1966,7 @@ func TestRenderSurface(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "each export is a block of its kinds, marked for every use case that binds it, and a kind without its schema says so",
+			name: "each export is a block of its kinds, marked for every consumer that binds it, and a kind without its schema says so",
 			model: pie.Model{
 				Exports: []pie.Export{core, {Path: "pms/other.yaml", Doc: 1, Name: "other.example.io", Resources: []pie.Resource{
 					{Group: "other.example.io", Name: "things", Schema: "v1.things.other.example.io"},
@@ -2435,6 +2458,234 @@ moved: kind Widget.core.example.io from a.example.io and b.example.io to c.examp
 	}
 }
 
+func TestRenderDiffListsClaims(t *testing.T) {
+	claiming := func(path, name string, claims ...pie.Claim) pie.Export {
+		return pie.Export{Path: path, Doc: 1, Name: name, Claims: claims}
+	}
+	claim := func(group, resource string, verbs ...string) pie.Claim {
+		return pie.Claim{Group: group, Resource: resource, Verbs: verbs}
+	}
+	selected := func(c pie.Claim) pie.Claim { c.Selected = true; return c }
+	tests := []struct {
+		name string
+		a, b pie.Model
+		want string
+	}{
+		{
+			name: "a claim only in B is added, one only in A removed, with its verbs and whether a selector narrows it; a resource of the core group by its plural, others with their group",
+			a: pie.Model{Exports: []pie.Export{claiming("pms/core.yaml", "core.example.io",
+				claim("", "secrets", "get", "list"), claim("core.example.io", "widgets", "get"))}},
+			b: pie.Model{Exports: []pie.Export{claiming("pms/core.yaml", "core.example.io",
+				claim("", "secrets", "get", "list"), selected(claim("", "configmaps", "get", "create")))}},
+			want: `removed: claim by core.example.io on widgets.core.example.io: get
+added: claim by core.example.io on configmaps: get, create (selected)
+`,
+		},
+		{
+			name: "a claim whose verbs or selector change is changed, its verbs compared as a set",
+			a: pie.Model{Exports: []pie.Export{claiming("pms/reader.yaml", "reader.example.io",
+				claim("core.example.io", "widgets", "get"), claim("", "secrets", "list", "get"), claim("", "events", "*"))}},
+			b: pie.Model{Exports: []pie.Export{claiming("pms/reader.yaml", "reader.example.io",
+				claim("core.example.io", "widgets", "get", "create"), claim("", "secrets", "get", "list"), selected(claim("", "events", "*")))}},
+			want: `changed: claim by reader.example.io on widgets.core.example.io: from get to get, create
+changed: claim by reader.example.io on events: from * to * (selected)
+`,
+		},
+		{
+			name: "the claims of an export only in A are removed, those of one only in B added; copies of an export count once, as the first",
+			a:    pie.Model{Exports: []pie.Export{claiming("pms/old.yaml", "old.example.io", claim("", "secrets", "get"))}},
+			b: pie.Model{Exports: []pie.Export{
+				claiming("pms/new.yaml", "new.example.io", claim("", "secrets", "get")),
+				claiming("test/new.yaml", "new.example.io", claim("", "configmaps", "get")),
+			}},
+			want: `removed: APIExport old.example.io
+added: APIExport new.example.io
+removed: claim by old.example.io on secrets: get
+added: claim by new.example.io on secrets: get
+`,
+		},
+		{
+			name: "claims are told apart by group and resource, a resource claimed twice in an export counts once, as the first; the claim lines come before those of consumers",
+			a: pie.Model{Exports: []pie.Export{claiming("pms/core.yaml", "core.example.io",
+				claim("rbac.authorization.k8s.io", "roles", "get"), claim("core.example.io", "roles", "get"),
+				claim("core.example.io", "widgets", "get"), claim("core.example.io", "widgets", "get", "create"))}},
+			b: pie.Model{
+				Exports: []pie.Export{claiming("pms/core.yaml", "core.example.io",
+					claim("rbac.authorization.k8s.io", "roles", "get"), claim("core.example.io", "roles", "get", "create"),
+					claim("core.example.io", "widgets", "get"), claim("core.example.io", "widgets", "get", "create"))},
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account"}},
+			},
+			want: `changed: claim by core.example.io on roles.core.example.io: from get to get, create
+added: WorkspaceType account
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderDiff(tt.a, tt.b)); got != tt.want {
+				t.Errorf("RenderDiff() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderDiffListsConsumers(t *testing.T) {
+	gizmos := pie.Resource{Group: "core.example.io", Name: "gizmos", Schema: "v1.gizmos.core.example.io"}
+	gizmoSchema := pie.Schema{Path: "pms/gizmos.yaml", Name: "v1.gizmos.core.example.io", Group: "core.example.io", Kind: "Gizmo", Plural: "gizmos"}
+	sprockets := pie.Resource{Group: "core.example.io", Name: "sprockets", Schema: "v1.sprockets.core.example.io"}
+	sprocketSchema := pie.Schema{Path: "pms/sprockets.yaml", Name: "v1.sprockets.core.example.io", Group: "core.example.io", Kind: "Sprocket", Plural: "sprockets"}
+	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml"), gizmoSchema, sprocketSchema}
+	export := func(name string, resources ...pie.Resource) pie.Export {
+		return pie.Export{Path: "pms/" + name + ".yaml", Doc: 1, Name: name, Resources: resources}
+	}
+	binds := func(name, path string, exports ...string) pie.WorkspaceType {
+		wt := pie.WorkspaceType{Path: "types/" + name + ".yaml", Doc: 1, Name: name}
+		for _, e := range exports {
+			wt.Binds = append(wt.Binds, pie.ExportRef{Path: path, Name: e})
+		}
+		return wt
+	}
+	binding := func(file, export string) pie.APIBinding {
+		return pie.APIBinding{Path: file, Doc: 1, Name: export, Export: pie.ExportRef{Path: "root:pms", Name: export}}
+	}
+	tests := []struct {
+		name string
+		a, b pie.Model
+		want string
+	}{
+		{
+			name: "a WorkspaceType or directory of APIBinding files only in A is removed, one only in B added with the exports it binds; a directory is no WorkspaceType of the same name",
+			a: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{binds("org", "root:pms", "core.example.io"), binds("mixin", "")},
+				APIBindings:    []pie.APIBinding{binding("old/dir/core.yaml", "core.example.io")},
+			},
+			b: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{binds("team", "root:pms", "core.example.io", "tools.example.io"), binds("solo", "")},
+				APIBindings:    []pie.APIBinding{binding("new/dir/core.yaml", "core.example.io"), binding("org/core.yaml", "core.example.io")},
+			},
+			want: `removed: WorkspaceType org
+removed: WorkspaceType mixin
+removed: APIBinding directory old/dir
+added: WorkspaceType team, binding core.example.io, tools.example.io
+added: WorkspaceType solo
+added: APIBinding directory new/dir, binding core.example.io
+added: APIBinding directory org, binding core.example.io
+`,
+		},
+		{
+			name: "a binding a WorkspaceType gains reaches its new workspaces only, unless kcp maintains its bindings; one it loses stays in existing workspaces; exports are told apart by name, not path",
+			a: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{binds("account", "root:pms", "core.example.io", "old.example.io"), binds("org", "root:pms", "core.example.io")},
+				APIBindings:    []pie.APIBinding{binding("d/core.yaml", "core.example.io"), binding("d/old.yaml", "old.example.io")},
+			},
+			b: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{
+					binds("account", "root:other", "core.example.io", "fga.example.io"),
+					func() pie.WorkspaceType {
+						wt := binds("org", "root:pms", "core.example.io", "fga.example.io")
+						wt.Maintains = true
+						return wt
+					}(),
+				},
+				APIBindings: []pie.APIBinding{binding("d/core.yaml", "core.example.io"), binding("d/fga.yaml", "fga.example.io")},
+			},
+			want: `removed: binding of old.example.io by WorkspaceType account, existing workspaces keep it
+added: binding of fga.example.io by WorkspaceType account, for new workspaces only
+added: binding of fga.example.io by WorkspaceType org, for existing workspaces too
+removed: binding of old.example.io in d
+added: binding of fga.example.io in d
+`,
+		},
+		{
+			name: "copies of a WorkspaceType count once, as the first; a directory binds an export once, however many of its files bind it",
+			a: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{binds("account", "root:pms", "core.example.io")},
+				APIBindings:    []pie.APIBinding{binding("d/core.yaml", "core.example.io")},
+			},
+			b: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{
+					binds("account", "root:pms", "core.example.io", "fga.example.io"),
+					{Path: "test/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "extra.example.io"}}},
+				},
+				APIBindings: []pie.APIBinding{
+					binding("d/core.yaml", "core.example.io"), binding("d/fga.yaml", "fga.example.io"),
+					{Path: "d/fga-elsewhere.yaml", Doc: 1, Name: "fga", Export: pie.ExportRef{Path: "root:other", Name: "fga.example.io"}},
+				},
+			},
+			want: `added: binding of fga.example.io by WorkspaceType account, for new workspaces only
+added: binding of fga.example.io in d
+`,
+		},
+		{
+			name: "a consumer both trees have whose kinds change, through the exports it binds and those of the types it extends, loses and gets them; a kind that moved to another export it binds is no change; a consumer only B has is added, not changed",
+			a: pie.Model{
+				Schemas: schemas,
+				Exports: []pie.Export{export("core.example.io", widgetResource(), gadgetResource(), sprockets)},
+				WorkspaceTypes: []pie.WorkspaceType{
+					binds("base", "root:pms", "core.example.io"),
+					{Path: "types/account.yaml", Doc: 1, Name: "account", Extends: []pie.TypeRef{{Path: "root", Name: "base"}}},
+					binds("org", "root:pms", "core.example.io"),
+				},
+				APIBindings: []pie.APIBinding{binding("bind/core.yaml", "core.example.io")},
+			},
+			b: pie.Model{
+				Schemas: schemas,
+				Exports: []pie.Export{export("core.example.io", widgetResource(), gizmos), export("fga.example.io", gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{
+					binds("base", "root:pms", "core.example.io", "fga.example.io"),
+					{Path: "types/account.yaml", Doc: 1, Name: "account", Extends: []pie.TypeRef{{Path: "root", Name: "base"}}},
+					binds("org", "root:pms", "core.example.io"),
+					binds("team", "root:pms", "core.example.io"),
+				},
+				APIBindings: []pie.APIBinding{binding("bind/core.yaml", "core.example.io")},
+			},
+			want: `added: APIExport fga.example.io
+moved: kind Gadget.core.example.io from core.example.io to fga.example.io
+removed: kind Sprocket.core.example.io from core.example.io
+added: kind Gizmo.core.example.io in core.example.io
+added: WorkspaceType team, binding core.example.io
+added: binding of fga.example.io by WorkspaceType base, for new workspaces only
+changed: WorkspaceType account loses Sprocket.core.example.io; gets Gizmo.core.example.io
+changed: WorkspaceType org loses Gadget.core.example.io, Sprocket.core.example.io; gets Gizmo.core.example.io
+changed: APIBinding directory bind loses Gadget.core.example.io, Sprocket.core.example.io; gets Gizmo.core.example.io
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderDiff(tt.a, tt.b)); got != tt.want {
+				t.Errorf("RenderDiff() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderOverviewDiffD2WrapsTagsToTheTitle(t *testing.T) {
+	serving := func(plurals ...string) pie.Model {
+		e := pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io"}
+		for _, p := range plurals {
+			e.Resources = append(e.Resources, pie.Resource{Group: "core.example.io", Name: p, Schema: "v1." + p + ".core.example.io"})
+		}
+		return pie.Model{Exports: []pie.Export{e}, WorkspaceTypes: []pie.WorkspaceType{
+			{Path: "types/organizations.yaml", Doc: 1, Name: "organizations"},
+			{Path: "types/organization.yaml", Doc: 1, Name: "organization", Parents: []pie.TypeRef{{Path: "root", Name: "organizations"}},
+				Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}},
+		}}
+	}
+
+	got := string(pie.RenderOverviewDiffD2(serving("anchorpoints", "gadgetassemblysets"), serving("boltassemblies", "sprocketassemblies")))
+
+	// The title "organizations › organization" is 28 letters, 30 bytes: tags wrap at 42 characters.
+	for _, want := range []string{
+		`"lost": "had in A: anchorpoints, gadgetassemblysets" {`,
+		`"got": "got in B: boltassemblies,\nsprocketassemblies" {`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, want)
+		}
+	}
+}
+
 func TestRenderSurfaceDiffD2(t *testing.T) {
 	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")}
 	export := func(name string, resources []pie.Resource, claims ...pie.Claim) pie.Export {
@@ -2448,7 +2699,7 @@ func TestRenderSurfaceDiffD2(t *testing.T) {
 		return pie.WorkspaceType{Path: "types/" + name + ".yaml", Doc: 1, Name: name, Binds: refs}
 	}
 
-	t.Run("a kind that moved shows in both exports, and each use case says whether it still gets it", func(t *testing.T) {
+	t.Run("a kind that moved shows in both exports, and each consumer says whether it still gets it", func(t *testing.T) {
 		a := pie.Model{Schemas: schemas,
 			Exports:        []pie.Export{export("core.example.io", []pie.Resource{widgetResource(), gadgetResource()})},
 			WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io"), typeBinding("org", "core.example.io"), typeBinding("legacy", "core.example.io")},
@@ -2576,7 +2827,7 @@ grid-gap: 0
 		}
 	})
 
-	t.Run("a kind gone for good is lost under the export each use case had bound", func(t *testing.T) {
+	t.Run("a kind gone for good is lost under the export each consumer had bound", func(t *testing.T) {
 		gizmos := pie.Resource{Group: "core.example.io", Name: "gizmos", Schema: "v1.gizmos.core.example.io"}
 		types := []pie.WorkspaceType{typeBinding("account", "core.example.io"), typeBinding("team", "spare.example.io")}
 		a := pie.Model{Schemas: schemas, WorkspaceTypes: types, Exports: []pie.Export{
@@ -2599,7 +2850,7 @@ grid-gap: 0
 		}
 	})
 
-	t.Run("a use case that is new but binds nothing is a change too", func(t *testing.T) {
+	t.Run("a consumer that is new but binds nothing is a change too", func(t *testing.T) {
 		a := pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", []pie.Resource{widgetResource()})},
 			WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io")}}
 		b := a
@@ -2662,7 +2913,7 @@ func TestRenderD2ExplainsTheRelationsItDraws(t *testing.T) {
 	}
 }
 
-// elkLayout opens every diagram: ELK routes the edges between the use cases and the exports
+// elkLayout opens every diagram: ELK routes the edges between the consumers and the exports
 // at right angles, which reads better on a page than d2's default layout.
 const elkLayout = `vars: {
   d2-config: {
@@ -2695,7 +2946,7 @@ const (
   "apibinding:to": "APIExport"
   "apibinding:from" -> "apibinding:to": "binds" {style.stroke: "#2f9e44"}
 `
-	legendBindsRefused = `  "refused:from": "use case"
+	legendBindsRefused = `  "refused:from": "consumer"
   "refused:to": "APIExport"
   "refused:from" -> "refused:to": "conflicts" {style.stroke: "#e03131"; style.stroke-width: 3}
 `
@@ -2922,7 +3173,7 @@ func TestRenderOverviewD2(t *testing.T) {
 			name: "an empty tree draws nothing but the layout and the looks",
 		},
 		{
-			name:  "exports nothing binds stand alone, without BOUND AT and without a legend",
+			name:  "exports nothing binds stand alone, without CONSUMERS and without a legend",
 			model: pie.Model{Exports: []pie.Export{core}},
 			want: `"apiexports": {
   label: "APIEXPORTS"
@@ -2932,7 +3183,7 @@ func TestRenderOverviewD2(t *testing.T) {
 `,
 		},
 		{
-			name: "a WorkspaceType in BOUND AT points at the exports it binds",
+			name: "a WorkspaceType in CONSUMERS points at the exports it binds",
 			model: pie.Model{
 				Exports: []pie.Export{core},
 				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account",
@@ -2949,12 +3200,12 @@ func TestRenderOverviewD2(t *testing.T) {
     "story": "bound at account" {class: story}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:types/account.yaml#1": "account" {class: workspacetype}
 }
-"bound-at"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
 ` + overviewLegend(legendBindsByDefault),
 		},
 		{
@@ -2998,21 +3249,21 @@ func TestRenderOverviewD2(t *testing.T) {
   }
   "apiexport:pms/lone.yaml#1": "lone.example.io" {class: export}
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:types/account.yaml#1": "account" {class: workspacetype}
   "workspacetype:types/org.yaml#1": "org" {class: workspacetype}
 }
 "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" -> "resources"."group:core.example.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-"bound-at"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
-"bound-at"."workspacetype:types/account.yaml#1" -> "apiexports"."apiexport:pms/other.yaml#1" {style.stroke: "#1971c2"}
-"bound-at"."workspacetype:types/org.yaml#1" -> "apiexports"."apiexport:pms/other.yaml#1" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."apiexport:pms/other.yaml#1" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:types/org.yaml#1" -> "apiexports"."apiexport:pms/other.yaml#1" {style.stroke: "#1971c2"}
 ` + overviewLegend(legendBindsByDefault, legendServes, legendClaimsRead, legendAPIGroup),
 		},
 		{
-			name: "an export's box says where it is bound, each place once: a WorkspaceType by its name, a directory of APIBinding files by the shortest end of its path no other such directory shares",
+			name: "an export's box says where it is bound, each consumer once: a WorkspaceType by its name, a directory of APIBinding files by the shortest end of its path no other such directory shares",
 			model: pie.Model{
 				Exports: []pie.Export{{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io"}},
 				WorkspaceTypes: []pie.WorkspaceType{
@@ -3038,8 +3289,8 @@ func TestRenderOverviewD2(t *testing.T) {
     "story": "bound at account, a/manifests, b/manifests, c/kcp, kcp, tools" {class: story}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:types/a.yaml#1": "account · types/a.yaml#1" {class: workspacetype}
   "workspacetype:types/b.yaml#1": "account · types/b.yaml#1" {class: workspacetype}
@@ -3049,17 +3300,17 @@ func TestRenderOverviewD2(t *testing.T) {
   "apibindings:kcp": "APIBindings in kcp" {class: apibindings}
   "apibindings:d/e/tools": "APIBindings in d/e/tools" {class: apibindings}
 }
-"bound-at"."workspacetype:types/a.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
-"bound-at"."workspacetype:types/b.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
-"bound-at"."apibindings:a/manifests" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
-"bound-at"."apibindings:b/manifests" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
-"bound-at"."apibindings:c/kcp" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
-"bound-at"."apibindings:kcp" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
-"bound-at"."apibindings:d/e/tools" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
+"consumers"."workspacetype:types/a.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:types/b.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
+"consumers"."apibindings:a/manifests" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
+"consumers"."apibindings:b/manifests" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
+"consumers"."apibindings:c/kcp" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
+"consumers"."apibindings:kcp" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
+"consumers"."apibindings:d/e/tools" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
 ` + overviewLegend(legendBindsByDefault, legendBindsByAPIBinding),
 		},
 		{
-			name: "bindings through extend are dashed, a type only extended is a tag, not a place, and a directory of APIBinding files binds in green",
+			name: "bindings through extend are dashed, a type only extended is a tag, not a consumer, and a directory of APIBinding files binds in green",
 			model: pie.Model{
 				Exports: []pie.Export{core},
 				WorkspaceTypes: []pie.WorkspaceType{
@@ -3079,14 +3330,14 @@ func TestRenderOverviewD2(t *testing.T) {
     "story": "bound at account, 01" {class: story}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:types/account.yaml#1": "account\nextends security" {class: workspacetype}
   "apibindings:kcp/01": "APIBindings in kcp/01" {class: apibindings}
 }
-"bound-at"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"; style.stroke-dash: 2}
-"bound-at"."apibindings:kcp/01" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#2f9e44"}
+"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+"consumers"."apibindings:kcp/01" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#2f9e44"}
 ` + overviewLegend(legendBindsThroughExtend, legendBindsByAPIBinding),
 		},
 		{
@@ -3143,8 +3394,8 @@ func TestRenderOverviewD2(t *testing.T) {
     "story": "bound at account" {class: story}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:types/account.yaml#1": "account" {class: workspacetype}
 }
@@ -3152,10 +3403,10 @@ func TestRenderOverviewD2(t *testing.T) {
 "apiexports"."workspace:root:pms"."apiexport:ws/a.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."workspace:root:pms"."apiexport:ws/b.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."workspace:root:pms"."apiexport:ws/c.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}
-"bound-at"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/a.yaml#1": "conflicts with b.example.io, c.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
-"bound-at"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/b.yaml#1": "conflicts with a.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
-"bound-at"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/c.yaml#1": "conflicts with a.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
-"bound-at"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/d.yaml#1" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/a.yaml#1": "conflicts with b.example.io, c.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
+"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/b.yaml#1": "conflicts with a.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
+"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/c.yaml#1": "conflicts with a.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
+"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/d.yaml#1" {style.stroke: "#1971c2"}
 ` + overviewLegend(legendBindsByDefault, legendBindsRefused, legendServes, legendAPIGroup, legendSharedKind),
 		},
 		{
@@ -3196,8 +3447,8 @@ func TestRenderOverviewD2(t *testing.T) {
     "story": "bound at account" {class: story}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:types/account.yaml#1": "account" {class: workspacetype}
 }
@@ -3205,8 +3456,8 @@ func TestRenderOverviewD2(t *testing.T) {
 "apiexports"."workspace:root:pms"."apiexport:ws/a.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."workspace:root:pms"."apiexport:ws/b.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."workspace:root:pms"."apiexport:ws/b.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}
-"bound-at"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/a.yaml#1": "conflicts with b.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
-"bound-at"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/b.yaml#1": "conflicts with a.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
+"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/a.yaml#1": "conflicts with b.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
+"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/b.yaml#1": "conflicts with a.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
 ` + overviewLegend(legendBindsRefused, legendServes, legendAPIGroup, legendSharedKind),
 		},
 		{
@@ -3227,15 +3478,15 @@ func TestRenderOverviewD2(t *testing.T) {
     "local.example.io @ (own workspace)": {class: outside-export}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:types/account.yaml#1": "account" {class: workspacetype}
   "workspacetype:types/org.yaml#1": "org" {class: workspacetype}
 }
-"bound-at"."workspacetype:types/account.yaml#1" -> "apiexports"."outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
-"bound-at"."workspacetype:types/account.yaml#1" -> "apiexports"."outside"."local.example.io @ (own workspace)" {style.stroke: "#1971c2"}
-"bound-at"."workspacetype:types/org.yaml#1" -> "apiexports"."outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."outside"."local.example.io @ (own workspace)" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:types/org.yaml#1" -> "apiexports"."outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
 ` + overviewLegend(legendBindsByDefault),
 		},
 		{
@@ -3267,14 +3518,14 @@ func TestRenderOverviewD2(t *testing.T) {
     "story": "bound at account" {class: story}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:a/account.yaml#1": "account · a/account.yaml#1" {class: workspacetype}
   "workspacetype:b/account.yaml#1": "account · b/account.yaml#1" {class: workspacetype}
 }
-"bound-at"."workspacetype:a/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:a/export.yaml#1" {style.stroke: "#1971c2"}
-"bound-at"."workspacetype:a/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:b/export.yaml#1" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:a/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:a/export.yaml#1" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:a/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:b/export.yaml#1" {style.stroke: "#1971c2"}
 ` + overviewLegend(legendBindsByDefault),
 		},
 	}
@@ -3743,7 +3994,7 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 	}
 }
 
-func TestRenderOverviewD2PlacesUseCasesInTheWorkspaceTree(t *testing.T) {
+func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 	typ := func(name string, parents, children []string, extends ...string) pie.WorkspaceType {
 		wt := pie.WorkspaceType{Path: "types/" + name + ".yaml", Doc: 1, Name: name}
 		for _, p := range parents {
@@ -3757,10 +4008,10 @@ func TestRenderOverviewD2PlacesUseCasesInTheWorkspaceTree(t *testing.T) {
 		}
 		return wt
 	}
-	column := func(places ...string) string {
-		return "\"bound-at\": {\n  label: \"BOUND AT\"\n  class: column\n" + strings.Join(places, "") + "}\n"
+	column := func(consumers ...string) string {
+		return "\"consumers\": {\n  label: \"CONSUMERS\"\n  class: column\n" + strings.Join(consumers, "") + "}\n"
 	}
-	place := func(name, label string) string {
+	consumer := func(name, label string) string {
 		return fmt.Sprintf("  %q: %q {class: workspacetype}\n", "workspacetype:types/"+name+".yaml#1", label)
 	}
 	tests := []struct {
@@ -3769,7 +4020,7 @@ func TestRenderOverviewD2PlacesUseCasesInTheWorkspaceTree(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "a place is named by its path in the tree the types' allowed parents and children spell out, either side or both, and listed in tree order from the types with no other parent in the tree",
+			name: "a consumer is named by its path in the tree the types' allowed parents and children spell out, either side or both, and listed in tree order from the types with no other parent in the tree",
 			model: pie.Model{WorkspaceTypes: []pie.WorkspaceType{
 				typ("team", []string{"universal"}, nil),
 				typ("folder", []string{"folder"}, nil),
@@ -3781,18 +4032,18 @@ func TestRenderOverviewD2PlacesUseCasesInTheWorkspaceTree(t *testing.T) {
 				typ("providers", nil, []string{"provider"}),
 			}},
 			want: column(
-				place("team", "universal › team"),
-				place("folder", "folder (nests)"),
-				place("orgs", "orgs"),
-				place("tools", "orgs › tools, providers › tools"),
-				place("org", "orgs › org"),
-				place("account", "orgs › org › account (nests)"),
-				place("providers", "providers"),
-				place("provider", "providers › provider"),
+				consumer("team", "universal › team"),
+				consumer("folder", "folder (nests)"),
+				consumer("orgs", "orgs"),
+				consumer("tools", "orgs › tools, providers › tools"),
+				consumer("org", "orgs › org"),
+				consumer("account", "orgs › org › account (nests)"),
+				consumer("providers", "providers"),
+				consumer("provider", "providers › provider"),
 			),
 		},
 		{
-			name: "a type others extend stays a place when the tree has a workspace of it, or puts it in or over another type",
+			name: "a type others extend stays a consumer when the tree has a workspace of it, or puts it in or over another type",
 			model: pie.Model{
 				WorkspaceTypes: []pie.WorkspaceType{
 					typ("account", nil, nil, "base", "mixin", "hub", "universal"),
@@ -3805,12 +4056,12 @@ func TestRenderOverviewD2PlacesUseCasesInTheWorkspaceTree(t *testing.T) {
 				Workspaces: []pie.Workspace{{Path: "ws/b.yaml", Doc: 1, Name: "b", Type: pie.TypeRef{Path: "root", Name: "base"}}},
 			},
 			want: column(
-				place("account", "account\nextends base, mixin, hub, universal"),
-				place("base", "base"),
-				place("holder", "holder"),
-				place("mixin", "holder › mixin"),
-				place("hub", "hub"),
-				place("spoke", "hub › spoke"),
+				consumer("account", "account\nextends base, mixin, hub, universal"),
+				consumer("base", "base"),
+				consumer("holder", "holder"),
+				consumer("mixin", "holder › mixin"),
+				consumer("hub", "hub"),
+				consumer("spoke", "hub › spoke"),
 			),
 		},
 		{
@@ -3820,8 +4071,8 @@ func TestRenderOverviewD2PlacesUseCasesInTheWorkspaceTree(t *testing.T) {
 				typ("b", []string{"a"}, nil),
 			}},
 			want: column(
-				place("a", "b › a"),
-				place("b", "a › b"),
+				consumer("a", "b › a"),
+				consumer("b", "a › b"),
 			),
 		},
 	}
@@ -3839,7 +4090,9 @@ const (
 `
 	legendOnlyInA = `  "only-a": "only in A" {style.stroke: "#ae3ec9"; style.fill: "#f8f0fc"}
 `
-	legendKindsChange = `  "kinds-change": "a place whose kinds change" {style.stroke: "#1098ad"; style.stroke-width: 3}
+	legendGotInB = `  "got": "got in B: kinds" {style.stroke: "#1098ad"; style.stroke-dash: 3; style.fill: transparent; style.font-size: 11; style.bold: false; style.font-color: "#1098ad"}
+`
+	legendHadInA = `  "lost": "had in A: kinds" {style.stroke: "#ae3ec9"; style.stroke-dash: 3; style.fill: transparent; style.font-size: 11; style.bold: false; style.font-color: "#ae3ec9"}
 `
 )
 
@@ -3858,7 +4111,17 @@ func TestRenderOverviewDiffD2(t *testing.T) {
 	sprockets := pie.Resource{Group: "core.example.io", Name: "sprockets", Schema: "v1.sprockets.core.example.io"}
 	anchors := pie.Resource{Group: "core.example.io", Name: "anchors", Schema: "v1.anchors.core.example.io"}
 	bolts := pie.Resource{Group: "core.example.io", Name: "bolts", Schema: "v1.bolts.core.example.io"}
+	dirBinding := pie.APIBinding{Path: "x/y/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}}
 	onlyInB := `; style.stroke: "#1098ad"; style.fill: "#e3fafc"`
+	// changed is a consumer of both trees whose kinds change, its title bold over a tag per direction.
+	changed := func(id, title, class string, tags ...string) string {
+		return fmt.Sprintf("  %q: {\n    label: %q\n    class: %s\n    style.bold: true\n    grid-columns: 1\n    grid-gap: 4\n%s  }\n", id, title, class, strings.Join(tags, ""))
+	}
+	tag := func(key, text, colour string) string {
+		return fmt.Sprintf("    %q: %q {style.stroke: %q; style.stroke-dash: 3; style.fill: transparent; style.font-size: 11; style.bold: false; style.font-color: %q}\n", key, text, colour, colour)
+	}
+	lost := func(text string) string { return tag("lost", text, "#ae3ec9") }
+	got := func(text string) string { return tag("got", text, "#1098ad") }
 	widgetsGroup := func(kinds ...string) string {
 		return "\"resources\": {\n  label: \"RESOURCES\"\n  class: column\n  \"group:core.example.io\": {\n    label: \"core.example.io\"\n    class: group\n" + strings.Join(kinds, "") + "  }\n"
 	}
@@ -3893,13 +4156,13 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     "story": "bound at account" {class: story}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:account": "account" {class: workspacetype}
 }
 "apiexports"."workspace:root:other"."apiexport:core.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-"bound-at"."workspacetype:account" -> "apiexports"."workspace:root:other"."apiexport:core.example.io" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:account" -> "apiexports"."workspace:root:other"."apiexport:core.example.io" {style.stroke: "#1971c2"}
 ` + overviewLegend(legendBindsByDefault, legendServes, legendAPIGroup),
 		},
 		{
@@ -3935,15 +4198,15 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     "story": "bound at account" {class: story}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:account": "account" {class: workspacetype}
 }
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."workspace:root:pms"."apiexport:other.example.io" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#1098ad"}
-"bound-at"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1971c2"}
-"bound-at"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:other.example.io" {style.stroke: "#1098ad"}
+"consumers"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:other.example.io" {style.stroke: "#1098ad"}
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#ae3ec9"}
 ` + overviewLegend(legendBindsByDefault, legendServes, legendAPIGroup, legendOnlyInB, legendOnlyInA),
 		},
@@ -3990,16 +4253,16 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     "story": "bound at org" {class: story}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:account": "account" {class: workspacetype}
   "workspacetype:org": "org" {class: workspacetype; style.stroke: "#ae3ec9"; style.fill: "#f8f0fc"}
 }
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-"bound-at"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1971c2"}
 "apiexports"."workspace:root:pms"."apiexport:old.example.io" -> "resources"."group:ui.example.io"."panels.ui.example.io" {style.stroke: "#ae3ec9"}
-"bound-at"."workspacetype:org" -> "apiexports"."workspace:root:pms"."apiexport:old.example.io" {style.stroke: "#ae3ec9"}
+"consumers"."workspacetype:org" -> "apiexports"."workspace:root:pms"."apiexport:old.example.io" {style.stroke: "#ae3ec9"}
 ` + overviewLegend(legendBindsByDefault, legendServes, legendAPIGroup, legendOnlyInA),
 		},
 		{
@@ -4062,16 +4325,16 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     "story": "bound at account" {class: story}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:account": "account" {class: workspacetype}
 }
 "apiexports"."workspace:root:pms"."apiexport:a.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."workspace:root:pms"."apiexport:b.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#1098ad"}
-"bound-at"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:a.example.io": "conflicts with b.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
-"bound-at"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:b.example.io": "conflicts with a.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
-"bound-at"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:a.example.io" {style.stroke: "#ae3ec9"}
+"consumers"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:a.example.io": "conflicts with b.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
+"consumers"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:b.example.io": "conflicts with a.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
+"consumers"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:a.example.io" {style.stroke: "#ae3ec9"}
 ` + overviewLegend(legendBindsByDefault, legendBindsRefused, legendServes, legendAPIGroup, legendOnlyInB, legendOnlyInA, legendSharedKind),
 		},
 		{
@@ -4101,16 +4364,15 @@ func TestRenderOverviewDiffD2(t *testing.T) {
   }
   "apiexport:other.example.io": "other.example.io" {class: export; style.stroke: "#1098ad"; style.fill: "#e3fafc"}
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
-  "workspacetype:account": "account\ngets gadgets" {class: workspacetype; style.stroke: "#1098ad"; style.stroke-width: 3}
-}
+` + changed("workspacetype:account", "account", "workspacetype", got("got in B: gadgets")) + `}
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#1098ad"}
 "apiexports"."apiexport:other.example.io" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#1098ad"}
-"bound-at"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1971c2"}
-` + overviewLegend(legendBindsByDefault, legendServes, legendAPIGroup, legendOnlyInB, legendKindsChange, legendSharedKind),
+"consumers"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1971c2"}
+` + overviewLegend(legendBindsByDefault, legendServes, legendAPIGroup, legendOnlyInB, legendGotInB, legendSharedKind),
 		},
 		{
 			name: "a claim new in B on what no export serves: its arrow and the resource cyan, under the category only B has",
@@ -4162,21 +4424,22 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     "topology.kcp.io @ root": {class: outside-export; style.stroke: "#1098ad"; style.fill: "#e3fafc"}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:account": "account" {class: workspacetype}
 }
-"bound-at"."workspacetype:account" -> "apiexports"."outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
-"bound-at"."workspacetype:account" -> "apiexports"."outside"."topology.kcp.io @ root" {style.stroke: "#1098ad"}
+"consumers"."workspacetype:account" -> "apiexports"."outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:account" -> "apiexports"."outside"."topology.kcp.io @ root" {style.stroke: "#1098ad"}
 ` + overviewLegend(legendBindsByDefault, legendOnlyInB),
 		},
 		{
-			name: "a place both trees have whose kinds change, those the exports it binds serve and not what they claim: a thick cyan frame over its own fill and a line of the kinds it loses and gets, by name; a place only B has is filled cyan, without the line",
+			name: "a consumer both trees have whose kinds change, those the exports it binds serve and not what they claim, keeps its look and gets a dashed tag of the kinds it had in A, grape, and one of those it got in B, cyan, by name and wrapped to about its title's width; a consumer only B has is filled cyan, without tags",
 			a: pie.Model{
 				Exports:        []pie.Export{exportOf("pms/core.yaml", "core.example.io", widgetResource(), gadgetResource(), anchors)},
 				Schemas:        []pie.Schema{widgetSchemaAt("pms/widgets.yaml")},
 				WorkspaceTypes: []pie.WorkspaceType{binds("types/account.yaml", "account", "core.example.io"), binds("types/org.yaml", "org", "core.example.io"), binds("types/guest.yaml", "guest", "core.example.io")},
+				APIBindings:    []pie.APIBinding{dirBinding},
 			},
 			b: pie.Model{
 				Exports: []pie.Export{
@@ -4190,6 +4453,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
 					binds("types/guest.yaml", "guest", "tools.example.io"),
 					binds("types/team.yaml", "team", "tools.example.io"),
 				},
+				APIBindings: []pie.APIBinding{dirBinding},
 			},
 			want: widgetsGroup(`    "widgets.core.example.io": "Widget" {class: kind}
 `, kind("sprockets", onlyInB), kind("bolts", onlyInB), kind("gadgets", ""), kind("anchors", "")) + `  "builtin": {
@@ -4214,7 +4478,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account, org, −guest" {class: story}
+    "story": "bound at account, org, y, −guest" {class: story}
   }
   "workspace:root:pms"."apiexport:tools.example.io": {
     label: "tools.example.io"
@@ -4225,32 +4489,33 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     "story": "bound at org, guest, team" {class: story}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
-  "workspacetype:account": "account\nloses anchors, gadgets; gets bolts, sprockets" {class: workspacetype; style.stroke: "#1098ad"; style.stroke-width: 3}
-  "workspacetype:org": "org\ngets bolts, sprockets" {class: workspacetype; style.stroke: "#1098ad"; style.stroke-width: 3}
-  "workspacetype:guest": "guest\nloses Widget" {class: workspacetype; style.stroke: "#1098ad"; style.stroke-width: 3}
-  "workspacetype:team": "team" {class: workspacetype; style.stroke: "#1098ad"; style.fill: "#e3fafc"}
-}
+` + changed("workspacetype:account", "account", "workspacetype", lost("had in A: anchors,\ngadgets"), got("got in B: bolts,\nsprockets")) +
+				changed("workspacetype:org", "org", "workspacetype", got("got in B: bolts,\nsprockets")) +
+				changed("workspacetype:guest", "guest", "workspacetype", lost("had in A: Widget")) + `  "workspacetype:team": "team" {class: workspacetype; style.stroke: "#1098ad"; style.fill: "#e3fafc"}
+` + changed("apibindings:x/y", "APIBindings in x/y", "apibindings",
+				lost("had in A: anchors, gadgets"), got("got in B: bolts, sprockets")) + `}
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."sprockets.core.example.io" {style.stroke: "#1098ad"}
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."bolts.core.example.io" {style.stroke: "#1098ad"}
 "apiexports"."workspace:root:pms"."apiexport:tools.example.io" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#1098ad"}
 "apiexports"."workspace:root:pms"."apiexport:tools.example.io" -> "resources"."group:core.example.io"."anchors.core.example.io" {style.stroke: "#1098ad"}
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."builtin": "read" {style.stroke: "#1098ad"; style.stroke-dash: 4}
-"bound-at"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1971c2"}
-"bound-at"."workspacetype:org" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1971c2"}
-"bound-at"."workspacetype:org" -> "apiexports"."workspace:root:pms"."apiexport:tools.example.io" {style.stroke: "#1098ad"}
-"bound-at"."workspacetype:guest" -> "apiexports"."workspace:root:pms"."apiexport:tools.example.io" {style.stroke: "#1098ad"}
-"bound-at"."workspacetype:team" -> "apiexports"."workspace:root:pms"."apiexport:tools.example.io" {style.stroke: "#1098ad"}
+"consumers"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:org" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:org" -> "apiexports"."workspace:root:pms"."apiexport:tools.example.io" {style.stroke: "#1098ad"}
+"consumers"."workspacetype:guest" -> "apiexports"."workspace:root:pms"."apiexport:tools.example.io" {style.stroke: "#1098ad"}
+"consumers"."workspacetype:team" -> "apiexports"."workspace:root:pms"."apiexport:tools.example.io" {style.stroke: "#1098ad"}
+"consumers"."apibindings:x/y" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#2f9e44"}
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#ae3ec9"}
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."anchors.core.example.io" {style.stroke: "#ae3ec9"}
-"bound-at"."workspacetype:guest" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#ae3ec9"}
-` + overviewLegend(legendBindsByDefault, legendServes, legendClaimsRead, legendAPIGroup, legendOnlyInB, legendOnlyInA, legendKindsChange),
+"consumers"."workspacetype:guest" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#ae3ec9"}
+` + overviewLegend(legendBindsByDefault, legendBindsByAPIBinding, legendServes, legendClaimsRead, legendAPIGroup, legendOnlyInB, legendOnlyInA, legendGotInB, legendHadInA),
 		},
 		{
-			name: "an export both trees have marks its story: a place binding it only in B with +, only in A with − at the end, told apart by place, not by its short name, which changes with the other directories; a needs line only in B with +, only in A with −",
+			name: "an export both trees have marks its story: a consumer binding it only in B with +, only in A with − at the end, told apart by id, not by its short name, which changes with the other directories; a needs line only in B with +, only in A with −",
 			a: pie.Model{
 				Exports: []pie.Export{
 					exportOf("pms/core.yaml", "core.example.io", widgetResource()),
@@ -4288,8 +4553,8 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     "story": "+writes widgets from core.example.io\n−reads widgets from core.example.io" {class: story}
   }
 }
-"bound-at": {
-  label: "BOUND AT"
+"consumers": {
+  label: "CONSUMERS"
   class: column
   "workspacetype:account": "account" {class: workspacetype}
   "workspacetype:team": "team" {class: workspacetype; style.stroke: "#1098ad"; style.fill: "#e3fafc"}
@@ -4299,12 +4564,12 @@ func TestRenderOverviewDiffD2(t *testing.T) {
 }
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."apiexport:reader.example.io" -> "resources"."group:core.example.io": "write" {style.stroke: "#1098ad"; style.stroke-dash: 4; style.stroke-width: 4}
-"bound-at"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1971c2"}
-"bound-at"."workspacetype:team" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1098ad"}
-"bound-at"."apibindings:a/bind" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#2f9e44"}
-"bound-at"."apibindings:b/bind" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1098ad"}
+"consumers"."workspacetype:account" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1971c2"}
+"consumers"."workspacetype:team" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1098ad"}
+"consumers"."apibindings:a/bind" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#2f9e44"}
+"consumers"."apibindings:b/bind" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#1098ad"}
 "apiexports"."apiexport:reader.example.io" -> "resources"."group:core.example.io": "read" {style.stroke: "#ae3ec9"; style.stroke-dash: 4}
-"bound-at"."workspacetype:org" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#ae3ec9"}
+"consumers"."workspacetype:org" -> "apiexports"."workspace:root:pms"."apiexport:core.example.io" {style.stroke: "#ae3ec9"}
 ` + overviewLegend(legendBindsByDefault, legendBindsByAPIBinding, legendServes, legendClaimsRead, legendClaimsWrite, legendAPIGroup, legendOnlyInB, legendOnlyInA),
 		},
 	}

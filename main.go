@@ -50,7 +50,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	watching := flags.Bool("watch", false, "with -o: keep FILE up to date and show it with d2 --watch")
 	surface := flags.Bool("surface", false, "print a markdown table instead of the diagram: which workspaces get which kinds, and what they grant")
 	diff := flags.Bool("diff", false, "print what changes from tree A to tree B, a line per change; with --surface, both tables as one in d2; with --style overview, both trees as one overview")
-	styleName := flags.String("style", "classic", "draw the diagram as `STYLE`: classic, a table per use case and export, or overview, exports in columns between what binds them")
+	styleName := flags.String("style", "classic", "draw the diagram as `STYLE`: classic, a table per consumer and export, or overview, exports in columns between what binds them")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printUsage(stdout, flags)

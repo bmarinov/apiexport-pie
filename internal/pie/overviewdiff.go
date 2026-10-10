@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // presence says which of the two trees of a diff a box or arrow is in. The zero value is both, which
@@ -28,9 +29,47 @@ var (
 	presenceSigns = map[presence]string{onlyInA: "−", onlyInB: "+"}
 )
 
-// changedLook frames a box both trees have whose contents change: thick, in the cyan of B, over the
-// box's own fill.
-var changedLook = fmt.Sprintf("; style.stroke: %q; style.stroke-width: 3", presenceStroke[onlyInB])
+// A consumer both trees have whose kinds change keeps its look and holds a tag of the kinds only one
+// tree gives it, keyed and headed by the tree.
+var (
+	tagKeys  = map[presence]string{onlyInA: "lost", onlyInB: "got"}
+	tagHeads = map[presence]string{onlyInA: "had in A:", onlyInB: "got in B:"}
+)
+
+// tag is the style of such a tag: dashed and written in the tree's colour, over the box's own fill.
+func (p presence) tag() string {
+	return fmt.Sprintf("style.stroke: %q; style.stroke-dash: 3; style.fill: transparent; style.font-size: 11; style.bold: false; style.font-color: %q",
+		presenceStroke[p], presenceStroke[p])
+}
+
+// tagWidth is the characters a consumer's tags wrap at, so the consumer keeps about the width it has
+// without them: its title's longest line and half again, as the title's letters are bigger and bold,
+// and no fewer than 24.
+func tagWidth(title string) int {
+	width := 24
+	for _, line := range strings.Split(title, "\n") {
+		width = max(width, utf8.RuneCountInString(line)*3/2)
+	}
+	return width
+}
+
+// wrapped lists kinds after head, a comma after each but the last, in lines of at most width
+// characters, broken only between kinds.
+func wrapped(head string, kinds []string, width int) string {
+	var lines []string
+	line := head
+	for i, k := range kinds {
+		if i < len(kinds)-1 {
+			k += ","
+		}
+		if utf8.RuneCountInString(line)+1+len(k) > width {
+			lines, line = append(lines, line), k
+			continue
+		}
+		line += " " + k
+	}
+	return strings.Join(append(lines, line), "\n")
+}
 
 // look is the style of a box only one tree has, to follow its class inside braces.
 func (p presence) look() string {
@@ -78,7 +117,7 @@ func (o overview) draws(p presence) bool {
 	}
 	return slices.ContainsFunc(o.exports, func(e exportBox) bool { return e.in == p }) ||
 		slices.ContainsFunc(o.outside, func(x outsideBox) bool { return x.in == p }) ||
-		slices.ContainsFunc(o.places, func(x placeBox) bool { return x.in == p }) ||
+		slices.ContainsFunc(o.consumers, func(x consumerBox) bool { return x.in == p }) ||
 		slices.ContainsFunc(o.edges, func(e overviewEdge) bool { return e.in == p })
 }
 
@@ -104,9 +143,9 @@ func diffOverviews(a, b overview) overview {
 		if i := slices.IndexFunc(a.exports, func(x exportBox) bool { return name(x) == name(e) }); i >= 0 {
 			e.in = inBoth
 			moved[at(a.exports[i])] = at(e)
-			// Places are told apart by id: a directory's short name changes with the other directories.
-			e.bound = merge(a.exports[i].bound, e.bound, func(p placeRef) string { return p.id },
-				func(p *placeRef, in presence) { p.name = presenceSigns[in] + p.name })
+			// Consumers are told apart by id: a directory's short name changes with the other directories.
+			e.bound = merge(a.exports[i].bound, e.bound, func(p consumerRef) string { return p.id },
+				func(p *consumerRef, in presence) { p.name = presenceSigns[in] + p.name })
 			e.needs = merge(a.exports[i].needs, e.needs, func(line string) string { return line },
 				func(line *string, in presence) { *line = presenceSigns[in] + *line })
 		}
@@ -127,11 +166,13 @@ func diffOverviews(a, b overview) overview {
 	}
 
 	u.outside = merge(a.outside, b.outside, func(x outsideBox) string { return x.name }, func(x *outsideBox, p presence) { x.in = p })
-	u.places = merge(a.places, b.places, func(x placeBox) string { return x.id }, func(x *placeBox, p presence) { x.in = p })
-	kindsInA, kindsInB, names := a.kindsAt(), b.kindsAt(), kindNames(u.areas)
-	for i, p := range u.places {
+	u.consumers = merge(a.consumers, b.consumers, func(x consumerBox) string { return x.id }, func(x *consumerBox, p presence) { x.in = p })
+	kindsInA, kindsInB, names := a.kindsAt(), b.kindsAt(), kindNames(u.areas, func(k kindBox) string { return k.name })
+	for i, p := range u.consumers {
 		if p.in == inBoth {
-			u.places[i].changes = changeOf(names, kindsInA[p.id], kindsInB[p.id])
+			if lost, got := kindsChange(names, kindsInA[p.id], kindsInB[p.id]); len(lost)+len(got) > 0 {
+				u.consumers[i].changed = map[presence][]string{onlyInA: lost, onlyInB: got}
+			}
 		}
 	}
 
@@ -149,7 +190,7 @@ func diffOverviews(a, b overview) overview {
 	return u
 }
 
-// kindsAt lists, by place, the kinds it gets, by their d2 paths: those the exports it binds serve.
+// kindsAt lists, by consumer, the kinds it gets, by their d2 paths: those the exports it binds serve.
 func (o overview) kindsAt() map[string]map[string]bool {
 	served := map[string][]string{}
 	for _, e := range o.edges {
@@ -158,9 +199,9 @@ func (o overview) kindsAt() map[string]map[string]bool {
 		}
 	}
 	kinds := map[string]map[string]bool{}
-	for _, p := range o.places {
+	for _, p := range o.consumers {
 		kinds[p.id] = map[string]bool{}
-		at := d2Path(boundAtColumn, p.id)
+		at := d2Path(consumersColumn, p.id)
 		for _, e := range o.edges {
 			if e.from != at {
 				continue
@@ -173,23 +214,21 @@ func (o overview) kindsAt() map[string]map[string]bool {
 	return kinds
 }
 
-// kindNames names the kinds of areas by their d2 paths.
-func kindNames(areas []resourceArea) map[string]string {
+// kindNames names the kinds of areas by their d2 paths, each as name says.
+func kindNames(areas []resourceArea, name func(kindBox) string) map[string]string {
 	names := map[string]string{}
 	for _, a := range areas {
 		for _, g := range a.groups {
 			for _, k := range g.kinds {
-				names[d2Path(resourcesColumn, "group:"+g.group, k.resource)] = k.name
+				names[d2Path(resourcesColumn, "group:"+g.group, k.resource)] = name(k)
 			}
 		}
 	}
 	return names
 }
 
-// changeOf says which of the kinds in a a place loses and which of those in b it gets, by name and
-// sorted, or nothing when they are the same.
-func changeOf(names map[string]string, a, b map[string]bool) string {
-	var lost, got []string
+// kindsChange lists the kinds in a and not in b, and those in b and not in a, by name and sorted.
+func kindsChange(names map[string]string, a, b map[string]bool) (lost, got []string) {
 	for k := range a {
 		if !b[k] {
 			lost = append(lost, names[k])
@@ -202,14 +241,7 @@ func changeOf(names map[string]string, a, b map[string]bool) string {
 	}
 	slices.Sort(lost)
 	slices.Sort(got)
-	var change []string
-	if len(lost) > 0 {
-		change = append(change, "loses "+strings.Join(lost, ", "))
-	}
-	if len(got) > 0 {
-		change = append(change, "gets "+strings.Join(got, ", "))
-	}
-	return strings.Join(change, "; ")
+	return lost, got
 }
 
 // merge lists b's items, each once, marked as in both trees when a has one of the same key and as only

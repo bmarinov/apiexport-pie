@@ -49,7 +49,7 @@ func (c conflict) String() string {
 	return c.other + " on " + c.mine + " (both use " + c.on + ")"
 }
 
-// conflictsAmong finds the bindings of one use case that kcp refuses together, from the side of
+// conflictsAmong finds the bindings of one consumer that kcp refuses together, from the side of
 // each export. Exports outside the tree serve nothing known.
 func conflictsAmong(bound []binding, resources map[string][]served) []conflict {
 	var conflicts []conflict

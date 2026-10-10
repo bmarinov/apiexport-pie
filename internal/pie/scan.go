@@ -257,6 +257,7 @@ func exportFrom(file string, doc int, export apisv1alpha2.APIExport) Export {
 
 func workspaceTypeFrom(file string, doc int, wt tenancyv1alpha1.WorkspaceType) WorkspaceType {
 	t := WorkspaceType{Path: file, Doc: doc, Name: wt.Name}
+	t.Maintains = wt.Spec.DefaultAPIBindingLifecycle != nil && *wt.Spec.DefaultAPIBindingLifecycle == tenancyv1alpha1.APIBindingLifecycleModeMaintain
 	for _, ref := range wt.Spec.DefaultAPIBindings {
 		t.Binds = append(t.Binds, ExportRef{Path: ref.Path, Name: ref.Export})
 	}

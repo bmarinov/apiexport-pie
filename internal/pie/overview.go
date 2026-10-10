@@ -12,7 +12,7 @@ import (
 const (
 	resourcesColumn = "resources"
 	exportsColumn   = "apiexports"
-	boundAtColumn   = "bound-at"
+	consumersColumn = "consumers"
 )
 
 // dagreLayout makes dagre the layout engine of the overview. Between plain boxes its curves read
@@ -20,7 +20,7 @@ const (
 // between them. D2_LAYOUT and --layout still win.
 const dagreLayout = "vars: {\n  d2-config: {\n    layout-engine: dagre\n  }\n}\n"
 
-// overviewClasses are the looks of the overview's boxes. A use case takes the colour of the edges
+// overviewClasses are the looks of the overview's boxes. A consumer takes the colour of the edges
 // it draws: blue for a WorkspaceType, green for APIBinding files.
 const overviewClasses = `classes: {
   column: {style: {fill: transparent; stroke: transparent; font-size: 22; bold: true; font-color: "#868e96"}}
@@ -88,7 +88,7 @@ var categoryLabels = map[string]string{
 // RenderOverviewD2 draws the model as d2 source in columns, from left to right: RESOURCES, each kind
 // once in a box of its API group; APIEXPORTS, in the box of the workspace they live in, pointing at
 // the kinds they serve and, dashed, at what their claims reach, the heavier the more verbs; and
-// BOUND AT, the WorkspaceTypes and directories of APIBinding files, pointing at the exports they
+// CONSUMERS, the WorkspaceTypes and directories of APIBinding files, pointing at the exports they
 // bind. A kind more than one export serves is orange, and what is claimed but served by no export in
 // the tree is dashed. Edges mean what they mean in RenderD2, and a legend explains them.
 func RenderOverviewD2(m Model) []byte {
@@ -102,22 +102,22 @@ type overview struct {
 	workspaces []string
 	exports    []exportBox
 	outside    []outsideBox
-	places     []placeBox
+	consumers  []consumerBox
 	edges      []overviewEdge
 }
 
-// exportBox is an export in APIEXPORTS: its keys inside the column, its name, the places binding
-// it and what it needs of other exports.
+// exportBox is an export in APIEXPORTS: its keys inside the column, its name, the consumers
+// binding it and what it needs of other exports.
 type exportBox struct {
 	keys  []string
 	label string
-	bound []placeRef
+	bound []consumerRef
 	needs []string
 	in    presence
 }
 
-// placeRef is a place binding an export, by its id in BOUND AT and its short name.
-type placeRef struct{ id, name string }
+// consumerRef is a consumer binding an export, by its id in CONSUMERS and its short name.
+type consumerRef struct{ id, name string }
 
 // story is what the box says under the name: where the export is bound and what it needs of other
 // exports, so the box reads without tracing arrows.
@@ -139,11 +139,12 @@ type outsideBox struct {
 	in   presence
 }
 
-// placeBox is a use case in BOUND AT. changes, in a diff, says which kinds a place both trees have
-// loses and gets.
-type placeBox struct {
-	id, label, class, changes string
-	in                        presence
+// consumerBox is a consumer in CONSUMERS. changed, in a diff, lists the kinds a consumer both trees
+// have had only in A and got only in B, by tree.
+type consumerBox struct {
+	id, label, class string
+	in               presence
+	changed          map[presence][]string
 }
 
 // overviewEdge is an arrow between d2 paths, drawn in the style of its relation.
@@ -203,14 +204,14 @@ func overviewOf(m Model, byName bool) overview {
 	}
 
 	resources := servedByExport(m.Exports, m.Schemas)
-	// boundBy lists, by export name, the places binding it, for its box.
-	boundBy := map[string][]placeRef{}
+	// boundBy lists, by export name, the consumers binding it, for its box.
+	boundBy := map[string][]consumerRef{}
 	boundAt := func(id, label, name, class string, bound []binding) {
-		o.places = append(o.places, placeBox{id: id, label: label, class: class})
+		o.consumers = append(o.consumers, consumerBox{id: id, label: label, class: class})
 		conflicts := conflictsAmong(bound, resources)
 		for _, bd := range bound {
-			if !slices.ContainsFunc(boundBy[bd.ref.Name], func(p placeRef) bool { return p.name == name }) {
-				boundBy[bd.ref.Name] = append(boundBy[bd.ref.Name], placeRef{id: id, name: name})
+			if !slices.ContainsFunc(boundBy[bd.ref.Name], func(p consumerRef) bool { return p.name == name }) {
+				boundBy[bd.ref.Name] = append(boundBy[bd.ref.Name], consumerRef{id: id, name: name})
 			}
 			// The other exports alone keep the label short; the warning on stderr names the resources.
 			r, label := bd.relation, ""
@@ -235,7 +236,7 @@ func overviewOf(m Model, byName bool) overview {
 				targets = append(targets, d2Path(exportsColumn, outsideID, box))
 			}
 			for _, target := range targets {
-				edge(r, d2Path(boundAtColumn, id), target, label)
+				edge(r, d2Path(consumersColumn, id), target, label)
 			}
 		}
 	}
@@ -273,7 +274,7 @@ func overviewOf(m Model, byName bool) overview {
 func (o overview) d2() []byte {
 	var b bytes.Buffer
 	b.WriteString(dagreLayout)
-	// Edges point from BOUND AT to APIEXPORTS to RESOURCES; laid out to the left, the columns read
+	// Edges point from CONSUMERS to APIEXPORTS to RESOURCES; laid out to the left, the columns read
 	// in that order from right to left.
 	b.WriteString("direction: left\n")
 	b.WriteString(overviewClasses)
@@ -325,14 +326,21 @@ func (o overview) d2() []byte {
 		}
 		b.WriteString("}\n")
 	}
-	if len(o.places) > 0 {
-		openColumn(&b, boundAtColumn, "BOUND AT")
-		for _, p := range o.places {
-			label, look := p.label, p.in.look()
-			if p.changes != "" {
-				label, look = label+"\n"+p.changes, changedLook
+	if len(o.consumers) > 0 {
+		openColumn(&b, consumersColumn, "CONSUMERS")
+		for _, p := range o.consumers {
+			if p.changed == nil {
+				fmt.Fprintf(&b, "  %q: %q {class: %s%s}\n", p.id, p.label, p.class, p.in.look())
+				continue
 			}
-			fmt.Fprintf(&b, "  %q: %q {class: %s%s}\n", p.id, label, p.class, look)
+			// A container's label is not bold, as a box's is; its tags stack under it.
+			fmt.Fprintf(&b, "  %q: {\n    label: %q\n    class: %s\n    style.bold: true\n    grid-columns: 1\n    grid-gap: 4\n", p.id, p.label, p.class)
+			for _, in := range []presence{onlyInA, onlyInB} {
+				if kinds := p.changed[in]; len(kinds) > 0 {
+					fmt.Fprintf(&b, "    %q: %q {%s}\n", tagKeys[in], wrapped(tagHeads[in], kinds, tagWidth(p.label)), in.tag())
+				}
+			}
+			b.WriteString("  }\n")
 		}
 		b.WriteString("}\n")
 	}
@@ -355,8 +363,10 @@ func (o overview) d2() []byte {
 			samples += fmt.Sprintf("  %q: %q {%s}\n", presenceKeys[p], presenceLabels[p], strings.TrimPrefix(p.look(), "; "))
 		}
 	}
-	if slices.ContainsFunc(o.places, func(p placeBox) bool { return p.changes != "" }) {
-		samples += fmt.Sprintf("  \"kinds-change\": \"a place whose kinds change\" {%s}\n", strings.TrimPrefix(changedLook, "; "))
+	for _, in := range []presence{onlyInB, onlyInA} {
+		if slices.ContainsFunc(o.consumers, func(p consumerBox) bool { return len(p.changed[in]) > 0 }) {
+			samples += fmt.Sprintf("  %q: %q {%s}\n", tagKeys[in], tagHeads[in]+" kinds", in.tag())
+		}
 	}
 	// Under the middle, the legend adds no width; at a corner it widens the diagram by its own.
 	writeLegend(&b, "bottom-center", drawn, samples, shared)

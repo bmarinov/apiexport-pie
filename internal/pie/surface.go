@@ -8,10 +8,10 @@ import (
 	"unicode/utf8"
 )
 
-// bound marks a use case that binds an export in the surface table.
+// bound marks a consumer that binds an export in the surface table.
 const bound = "●"
 
-// surface is the table both renderings draw: a column per use case, and a block of rows per export.
+// surface is the table both renderings draw: a column per consumer, and a block of rows per export.
 // A diff of two surfaces is a surface too, whose parts say how they changed.
 type surface struct {
 	columns []surfaceColumn
@@ -27,7 +27,7 @@ const (
 	removed
 )
 
-// surfaceColumn is a use case, by name and in the lines of its header.
+// surfaceColumn is a consumer, by name and in the lines of its header.
 type surfaceColumn struct {
 	name   string
 	lines  []string
@@ -41,7 +41,7 @@ type surfaceBlock struct {
 	change change
 }
 
-// surfaceRow is a kind or a set of claims, in one or more lines, with a cell per use case: bound or
+// surfaceRow is a kind or a set of claims, in one or more lines, with a cell per consumer: bound or
 // empty, and on a claims row a line saying which of them a binding file does not grant. writes marks
 // claims with a verb beyond reading. key tells the row apart from the others of its export: the
 // resource of a kind, the grants of a set of claims.
@@ -55,18 +55,18 @@ type surfaceRow struct {
 	cellChanges []change
 }
 
-// surfaceOf lays out which use case gets which kinds and grants which claims. A use case that binds
+// surfaceOf lays out which consumer gets which kinds and grants which claims. A consumer that binds
 // an export gets all of it, so each export reads as one block, the bundle a workspace takes or leaves.
 func surfaceOf(m Model) surface {
 	var s surface
-	cases := useCasesOf(m)
-	for _, c := range cases {
+	consumers := consumersOf(m)
+	for _, c := range consumers {
 		s.columns = append(s.columns, surfaceColumn{name: c.name, lines: c.column})
 	}
 
 	cellsOf := func(export string, claims []Claim) [][]string {
-		cells := make([][]string, 0, len(cases))
-		for _, c := range cases {
+		cells := make([][]string, 0, len(consumers))
+		for _, c := range consumers {
 			var cell, refused []string
 			if slices.Contains(c.exports, export) {
 				cell = append(cell, bound)
@@ -121,7 +121,7 @@ func surfaceOf(m Model) surface {
 		}
 		block(e.Name, kinds, e.Claims)
 	}
-	for _, c := range cases {
+	for _, c := range consumers {
 		for _, name := range c.exports {
 			if !slices.Contains(drawn, name) {
 				drawn = append(drawn, name)
@@ -132,8 +132,8 @@ func surfaceOf(m Model) surface {
 	return s
 }
 
-// RenderSurface draws which use case gets which kinds as a markdown table for docs: a row per kind
-// and per set of claims, grouped by the export, and a column per use case.
+// RenderSurface draws which consumer gets which kinds as a markdown table for docs: a row per kind
+// and per set of claims, grouped by the export, and a column per consumer.
 func RenderSurface(m Model) []byte {
 	s := surfaceOf(m)
 	var b bytes.Buffer

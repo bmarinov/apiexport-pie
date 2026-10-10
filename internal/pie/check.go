@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Check warns about the exports a use case binds that kcp refuses together, of which a workspace
+// Check warns about the exports a consumer binds that kcp refuses together, of which a workspace
 // gets only one; RenderD2 marks the same conflicts in red. It then notes what is worth a look.
 func Check(m Model) []Diagnostic {
 	resources := servedByExport(m.Exports, m.Schemas)
@@ -117,7 +117,7 @@ func cohesionNotices(m Model, exports []Export) []Diagnostic {
 	return diags
 }
 
-// pairsOf lists the conflicts among one use case's bindings once each, from the side of the export
+// pairsOf lists the conflicts among one consumer's bindings once each, from the side of the export
 // bound first.
 func pairsOf(bound []binding, resources map[string][]served) []conflict {
 	at := func(name string) int {

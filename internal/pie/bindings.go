@@ -17,7 +17,7 @@ type bindingDir struct {
 }
 
 // bindingsByDir groups APIBinding files by directory, in the order the directories first appear.
-// A directory of manifests is usually applied to one workspace, so it reads as one use case.
+// A directory of manifests is usually applied to one workspace, so it reads as one consumer.
 func bindingsByDir(bindings []APIBinding) []bindingDir {
 	var dirs []bindingDir
 	at := map[string]int{}
@@ -36,8 +36,8 @@ func bindingsByDir(bindings []APIBinding) []bindingDir {
 	return dirs
 }
 
-// binding is one export a use case binds. via names the WorkspaceType it is inherited from, and is
-// empty when the use case declares the binding itself.
+// binding is one export a consumer binds. via names the WorkspaceType it is inherited from, and is
+// empty when the consumer declares the binding itself.
 type binding struct {
 	ref      ExportRef
 	via      string
@@ -87,18 +87,18 @@ func bindingsOf(t WorkspaceType, types []WorkspaceType) []binding {
 	return bound
 }
 
-// useCase is a set of workspaces that bind the same exports: those of one WorkspaceType, or those of
+// consumer is a set of workspaces that bind the same exports: those of one WorkspaceType, or those of
 // one directory of APIBinding files. withheld says, per export, the claims its binding file does not
 // accept; kcp accepts every claim of a WorkspaceType's bindings, so those have none.
-type useCase struct {
+type consumer struct {
 	name     string
 	column   []string
 	exports  []string
 	withheld map[string][]GroupResource
 }
 
-// useCasesOf lists the use cases of a tree: its WorkspaceTypes, then its directories of APIBindings.
-func useCasesOf(m Model) []useCase {
+// consumersOf lists the consumers of a tree: its WorkspaceTypes, then its directories of APIBindings.
+func consumersOf(m Model) []consumer {
 	exportsOf := func(bindings []binding) []string {
 		var names []string
 		for _, bd := range bindings {
@@ -106,9 +106,9 @@ func useCasesOf(m Model) []useCase {
 		}
 		return names
 	}
-	var cases []useCase
+	var consumers []consumer
 	for _, t := range m.WorkspaceTypes {
-		cases = append(cases, useCase{name: t.Name, column: []string{t.Name}, exports: exportsOf(bindingsOf(t, m.WorkspaceTypes))})
+		consumers = append(consumers, consumer{name: t.Name, column: []string{t.Name}, exports: exportsOf(bindingsOf(t, m.WorkspaceTypes))})
 	}
 	for _, dir := range bindingsByDir(m.APIBindings) {
 		withheld := map[string][]GroupResource{}
@@ -124,14 +124,14 @@ func useCasesOf(m Model) []useCase {
 				}
 			}
 		}
-		cases = append(cases, useCase{
+		consumers = append(consumers, consumer{
 			name:     "APIBindings in " + dir.dir,
 			column:   append([]string{"APIBindings in"}, strings.SplitAfter(dir.dir, "/")...),
 			exports:  exportsOf(dir.bound),
 			withheld: withheld,
 		})
 	}
-	return cases
+	return consumers
 }
 
 func typeNamed(name string, types []WorkspaceType) (WorkspaceType, bool) {

@@ -334,7 +334,7 @@ func TestRun(t *testing.T) {
 		}
 	})
 
-	t.Run("warns on stderr about exports a use case binds that kcp refuses together", func(t *testing.T) {
+	t.Run("warns on stderr about exports a consumer binds that kcp refuses together", func(t *testing.T) {
 		dir := writeTree(t, map[string]string{
 			"ws/export.yaml":  exportManifest,
 			"ws/other.yaml":   strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1),
@@ -399,7 +399,7 @@ spec: {}
 
 		code := run(context.Background(), []string{"--diff", a, b + "/"}, &stdout, &stderr)
 
-		want := "removed: APIExport core.example.io\nadded: APIExport other.example.io\nmoved: kind widgets.core.example.io from core.example.io to other.example.io\n"
+		want := "removed: APIExport core.example.io\nadded: APIExport other.example.io\nmoved: kind widgets.core.example.io from core.example.io to other.example.io\nadded: WorkspaceType security\n"
 		if code != 0 || stdout.String() != want || !strings.HasPrefix(stderr.String(), "warning: "+b+"/ws/broken.yaml#1: ") || strings.Count(stderr.String(), "\n") != 1 {
 			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0, stdout:\n%s\nand one warning for %s/ws/broken.yaml#1", code, stdout.String(), stderr.String(), want, b)
 		}
@@ -490,7 +490,7 @@ spec: {}
 		}
 	})
 
-	t.Run("with --surface prints which use case gets which kinds as a markdown table", func(t *testing.T) {
+	t.Run("with --surface prints which consumer gets which kinds as a markdown table", func(t *testing.T) {
 		dir := writeTree(t, map[string]string{
 			"ws/export.yaml":  exportManifest,
 			"ws/widgets.yaml": schemaManifest,
