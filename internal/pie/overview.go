@@ -107,17 +107,20 @@ type overview struct {
 }
 
 // exportBox is an export in APIEXPORTS: its keys inside the column, its name, the consumers
-// binding it and what it needs of other exports.
+// binding it and what it needs of other exports. kept, in a diff, names the kinds an export of both
+// trees serves only in A, which the workspaces binding it already keep.
 type exportBox struct {
 	keys  []string
 	label string
 	bound []consumerRef
+	kept  []string
 	needs []string
 	in    presence
 }
 
-// consumerRef is a consumer binding an export, by its id in CONSUMERS and its short name.
-type consumerRef struct{ id, name string }
+// consumerRef is a consumer binding an export, by its id in CONSUMERS and its short name. note, in a
+// diff, says what kcp makes of a change of the binding in the workspaces the consumer already has.
+type consumerRef struct{ id, name, note string }
 
 // story is what the box says under the name: where the export is bound and what it needs of other
 // exports, so the box reads without tracing arrows.
@@ -126,9 +129,15 @@ func (e exportBox) story() []string {
 	if len(e.bound) > 0 {
 		names := make([]string, 0, len(e.bound))
 		for _, p := range e.bound {
+			if p.note != "" {
+				p.name += " (" + p.note + ")"
+			}
 			names = append(names, p.name)
 		}
 		story = append(story, "bound at "+strings.Join(names, ", "))
+	}
+	if len(e.kept) > 0 {
+		story = append(story, "existing workspaces keep "+strings.Join(e.kept, ", "))
 	}
 	return append(story, e.needs...)
 }

@@ -2407,25 +2407,28 @@ func TestRenderDiffFollowsKindsAcrossExports(t *testing.T) {
 		want string
 	}{
 		{
-			name: "a kind that now sits in another export has moved",
+			name: "a kind that now sits in another export has moved, and the workspaces binding the old export keep it",
 			a:    pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource(), gadgetResource())}},
 			b:    pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource()), export("fga.example.io", gadgetResource())}},
 			want: `added: APIExport fga.example.io
-moved: kind Gadget.core.example.io from core.example.io to fga.example.io
+moved: kind Gadget.core.example.io from core.example.io to fga.example.io, existing workspaces keep it
+added: notice: API group core.example.io is served by 2 APIExports: core.example.io, fga.example.io
 `,
 		},
 		{
-			name: "a kind new to the tree is added in its export, one gone from it removed from its own",
+			name: "a kind new to the tree is added in its export, one gone from it removed from its own, which says nothing of its bindings when it is gone too",
 			a:    pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource()), export("old.example.io", things, gadgetResource())}},
 			b:    pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource(), gizmos)}},
 			want: `removed: APIExport old.example.io
 removed: kind things.old.example.io from old.example.io
 removed: kind Gadget.core.example.io from old.example.io
 added: kind Gizmo.core.example.io in core.example.io
+removed: notice: APIExport old.example.io serves 2 API groups: old.example.io, core.example.io
+removed: notice: API group core.example.io is served by 2 APIExports: core.example.io, old.example.io
 `,
 		},
 		{
-			name: "a kind one more export serves is added there, one fewer removed there",
+			name: "a kind one more export serves is added there, one fewer removed there, where existing workspaces keep it",
 			a: pie.Model{Schemas: schemas, Exports: []pie.Export{
 				export("core.example.io", widgetResource()), export("spare.example.io", widgetResource(), gadgetResource()),
 			}},
@@ -2433,8 +2436,21 @@ added: kind Gizmo.core.example.io in core.example.io
 				export("core.example.io", widgetResource()), export("spare.example.io", gadgetResource()), export("extra.example.io", gadgetResource()),
 			}},
 			want: `added: APIExport extra.example.io
-removed: kind Widget.core.example.io from spare.example.io
+removed: kind Widget.core.example.io from spare.example.io, existing workspaces keep it
 added: kind Gadget.core.example.io in extra.example.io
+changed: notice: API group core.example.io is served by 3 APIExports: core.example.io, spare.example.io, extra.example.io
+`,
+		},
+		{
+			name: "a kind two exports stop serving is removed from each, and only the one both trees have keeps it in existing workspaces",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{
+				export("old.example.io", widgetResource()), export("spare.example.io", widgetResource(), gadgetResource()),
+			}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{export("spare.example.io", gadgetResource())}},
+			want: `removed: APIExport old.example.io
+removed: kind Widget.core.example.io from old.example.io
+removed: kind Widget.core.example.io from spare.example.io, existing workspaces keep it
+removed: notice: API group core.example.io is served by 2 APIExports: old.example.io, spare.example.io
 `,
 		},
 		{
@@ -2445,7 +2461,8 @@ added: kind Gadget.core.example.io in extra.example.io
 			}},
 			b: pie.Model{Schemas: schemas, Exports: []pie.Export{export("a.example.io"), export("b.example.io"), export("c.example.io", widgetResource())}},
 			want: `added: APIExport c.example.io
-moved: kind Widget.core.example.io from a.example.io and b.example.io to c.example.io
+moved: kind Widget.core.example.io from a.example.io and b.example.io to c.example.io, existing workspaces keep it
+removed: notice: API group core.example.io is served by 2 APIExports: a.example.io, b.example.io
 `,
 		},
 	}
@@ -2517,6 +2534,8 @@ added: claim by new.example.io on secrets: get
 			},
 			want: `changed: claim by core.example.io on roles.core.example.io: from get to get, create
 added: WorkspaceType account
+added: notice: WorkspaceType account binds no APIExport
+added: notice: APIExport core.example.io is bound by no WorkspaceType or APIBinding in the tree
 `,
 		},
 	}
@@ -2570,6 +2589,10 @@ added: WorkspaceType team, binding core.example.io, tools.example.io
 added: WorkspaceType solo
 added: APIBinding directory new/dir, binding core.example.io
 added: APIBinding directory org, binding core.example.io
+removed: notice: WorkspaceType org binds only APIExports from outside the tree: core.example.io
+removed: notice: WorkspaceType mixin binds no APIExport
+added: notice: WorkspaceType team binds only APIExports from outside the tree: core.example.io, tools.example.io
+added: notice: WorkspaceType solo binds no APIExport
 `,
 		},
 		{
@@ -2594,6 +2617,8 @@ added: binding of fga.example.io by WorkspaceType account, for new workspaces on
 added: binding of fga.example.io by WorkspaceType org, for existing workspaces too
 removed: binding of old.example.io in d
 added: binding of fga.example.io in d
+changed: notice: WorkspaceType account binds only APIExports from outside the tree: core.example.io, fga.example.io
+changed: notice: WorkspaceType org binds only APIExports from outside the tree: core.example.io, fga.example.io
 `,
 		},
 		{
@@ -2614,6 +2639,7 @@ added: binding of fga.example.io in d
 			},
 			want: `added: binding of fga.example.io by WorkspaceType account, for new workspaces only
 added: binding of fga.example.io in d
+changed: notice: WorkspaceType account binds only APIExports from outside the tree: core.example.io, fga.example.io
 `,
 		},
 		{
@@ -2640,14 +2666,219 @@ added: binding of fga.example.io in d
 				APIBindings: []pie.APIBinding{binding("bind/core.yaml", "core.example.io")},
 			},
 			want: `added: APIExport fga.example.io
-moved: kind Gadget.core.example.io from core.example.io to fga.example.io
-removed: kind Sprocket.core.example.io from core.example.io
+moved: kind Gadget.core.example.io from core.example.io to fga.example.io, existing workspaces keep it
+removed: kind Sprocket.core.example.io from core.example.io, existing workspaces keep it
 added: kind Gizmo.core.example.io in core.example.io
 added: WorkspaceType team, binding core.example.io
 added: binding of fga.example.io by WorkspaceType base, for new workspaces only
 changed: WorkspaceType account loses Sprocket.core.example.io; gets Gizmo.core.example.io
 changed: WorkspaceType org loses Gadget.core.example.io, Sprocket.core.example.io; gets Gizmo.core.example.io
 changed: APIBinding directory bind loses Gadget.core.example.io, Sprocket.core.example.io; gets Gizmo.core.example.io
+added: notice: API group core.example.io is served by 2 APIExports: core.example.io, fga.example.io
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderDiff(tt.a, tt.b)); got != tt.want {
+				t.Errorf("RenderDiff() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderDiffListsNotices(t *testing.T) {
+	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")}
+	panels := pie.Resource{Group: "ui.example.io", Name: "panels"}
+	bolts := pie.Resource{Group: "billing.example.io", Name: "bolts"}
+	sprockets := pie.Resource{Group: "core.example.io", Name: "sprockets"}
+	export := func(name string, resources []pie.Resource, claims ...pie.Claim) pie.Export {
+		return pie.Export{Path: "pms/" + name + ".yaml", Doc: 1, Name: name, Resources: resources, Claims: claims}
+	}
+	claim := func(group, resource string) pie.Claim {
+		return pie.Claim{Group: group, Resource: resource, Verbs: []string{"get"}}
+	}
+	literal := func(c pie.Claim) pie.Claim {
+		c.FromExport, c.LiteralHash = true, true
+		return c
+	}
+	typeBinding := func(name string, exports ...string) pie.WorkspaceType {
+		t := pie.WorkspaceType{Path: "types/" + name + ".yaml", Doc: 1, Name: name}
+		for _, e := range exports {
+			t.Binds = append(t.Binds, pie.ExportRef{Path: "root:pms", Name: e})
+		}
+		return t
+	}
+	core := export("core.example.io", []pie.Resource{widgetResource(), gadgetResource()})
+	tests := []struct {
+		name string
+		a, b pie.Model
+		want string
+	}{
+		{
+			name: "after the other changes, a notice only A has is removed and one only B has added, each told apart by what it is about",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{core, export("old.example.io", []pie.Resource{panels})},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("org", "core.example.io")}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{core, export("extra.example.io", []pie.Resource{panels})},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("org", "core.example.io")}},
+			want: `removed: APIExport old.example.io
+added: APIExport extra.example.io
+moved: kind panels.ui.example.io from old.example.io to extra.example.io
+removed: notice: APIExport old.example.io is bound by no WorkspaceType or APIBinding in the tree
+added: notice: APIExport extra.example.io is bound by no WorkspaceType or APIBinding in the tree
+`,
+		},
+		{
+			name: "a notice about the same thing in other words has changed; in the same words it is no change",
+			a: pie.Model{Schemas: schemas,
+				Exports:        []pie.Export{export("core.example.io", []pie.Resource{widgetResource()}), export("fga.example.io", []pie.Resource{gadgetResource()})},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("org", "core.example.io", "fga.example.io"), typeBinding("empty")}},
+			b: pie.Model{Schemas: schemas,
+				Exports: []pie.Export{
+					export("core.example.io", []pie.Resource{widgetResource()}), export("fga.example.io", []pie.Resource{gadgetResource()}),
+					export("sys.example.io", []pie.Resource{sprockets}),
+				},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("org", "core.example.io", "fga.example.io", "sys.example.io"), typeBinding("empty")}},
+			want: `added: APIExport sys.example.io
+added: kind sprockets.core.example.io in sys.example.io
+added: binding of sys.example.io by WorkspaceType org, for new workspaces only
+changed: WorkspaceType org gets sprockets.core.example.io
+changed: notice: API group core.example.io is served by 3 APIExports: core.example.io, fga.example.io, sys.example.io
+`,
+		},
+		{
+			name: "a WorkspaceType that bound nothing and now binds only exports from outside the tree has changed",
+			a:    pie.Model{WorkspaceTypes: []pie.WorkspaceType{typeBinding("lonely")}},
+			b: pie.Model{WorkspaceTypes: []pie.WorkspaceType{
+				{Path: "types/lonely.yaml", Doc: 1, Name: "lonely", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}}},
+			}},
+			want: `added: binding of tenancy.kcp.io by WorkspaceType lonely, for new workspaces only
+changed: notice: WorkspaceType lonely binds only APIExports from outside the tree: tenancy.kcp.io
+`,
+		},
+		{
+			name: "an export that serves another API group has changed",
+			a:    pie.Model{Exports: []pie.Export{export("core.example.io", []pie.Resource{widgetResource(), panels})}},
+			b:    pie.Model{Exports: []pie.Export{export("core.example.io", []pie.Resource{widgetResource(), panels, bolts})}},
+			want: `added: kind bolts.billing.example.io in core.example.io
+changed: notice: APIExport core.example.io serves 3 API groups: core.example.io, ui.example.io, billing.example.io
+`,
+		},
+		{
+			name: "two exports bound together that claim another resource both have changed",
+			a: pie.Model{
+				Exports: []pie.Export{
+					export("a.example.io", nil, claim("", "secrets"), claim("", "configmaps")), export("b.example.io", nil, claim("", "secrets")),
+				},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "a.example.io", "b.example.io")},
+			},
+			b: pie.Model{
+				Exports: []pie.Export{
+					export("a.example.io", nil, claim("", "secrets"), claim("", "configmaps")), export("b.example.io", nil, claim("", "secrets"), claim("", "configmaps")),
+				},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "a.example.io", "b.example.io")},
+			},
+			want: `added: claim by b.example.io on configmaps: get
+changed: notice: APIExports a.example.io and b.example.io both claim secrets, configmaps where account binds both
+`,
+		},
+		{
+			name: "an export that may write kcp's own resources in more places has changed",
+			a: pie.Model{Exports: []pie.Export{export("a.example.io", nil, pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}})},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "a.example.io")}},
+			b: pie.Model{Exports: []pie.Export{export("a.example.io", nil, pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}})},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "a.example.io"), typeBinding("org", "a.example.io")}},
+			want: `added: WorkspaceType org, binding a.example.io
+changed: notice: APIExport a.example.io may write kcp's own resources where account and org bind it: * on workspaces
+`,
+		},
+		{
+			name: "a claim on more of what another export serves has changed, and a literal hash only B writes out is added beside it",
+			a:    pie.Model{Schemas: schemas, Exports: []pie.Export{core, export("terminal.example.io", nil, claim("core.example.io", "widgets"))}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{core,
+				export("terminal.example.io", nil, claim("core.example.io", "widgets"), literal(claim("core.example.io", "gadgets")))}},
+			want: `added: claim by terminal.example.io on gadgets.core.example.io: get
+changed: notice: APIExport terminal.example.io claims widgets, gadgets from core.example.io
+added: notice: APIExport terminal.example.io claims gadgets with a literal identity hash, but core.example.io names no identity secret, so kcp generates a new identity for it in every installation
+`,
+		},
+		{
+			name: "notices of a kind about different exports are told apart: one serving several API groups",
+			a:    pie.Model{Exports: []pie.Export{export("x.example.io", []pie.Resource{widgetResource(), panels})}},
+			b: pie.Model{Exports: []pie.Export{
+				export("x.example.io", []pie.Resource{widgetResource(), panels}),
+				export("y.example.io", []pie.Resource{bolts, {Group: "dash.example.io", Name: "dials"}}),
+			}},
+			want: `added: APIExport y.example.io
+added: kind bolts.billing.example.io in y.example.io
+added: kind dials.dash.example.io in y.example.io
+added: notice: APIExport y.example.io serves 2 API groups: billing.example.io, dash.example.io
+`,
+		},
+		{
+			name: "about different API groups: one several exports serve",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{
+				export("x.example.io", []pie.Resource{widgetResource()}), export("z.example.io", []pie.Resource{gadgetResource()}),
+			}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{
+				export("x.example.io", []pie.Resource{widgetResource()}), export("z.example.io", []pie.Resource{gadgetResource()}),
+				export("p.example.io", []pie.Resource{panels}), export("q.example.io", []pie.Resource{{Group: "ui.example.io", Name: "sliders"}}),
+			}},
+			want: `added: APIExport p.example.io
+added: APIExport q.example.io
+added: kind panels.ui.example.io in p.example.io
+added: kind sliders.ui.example.io in q.example.io
+added: notice: API group ui.example.io is served by 2 APIExports: p.example.io, q.example.io
+`,
+		},
+		{
+			name: "about different pairs of exports: two that claim the same resources",
+			a: pie.Model{
+				Exports:        []pie.Export{export("a.example.io", nil, claim("", "secrets"), claim("", "configmaps")), export("b.example.io", nil, claim("", "secrets"))},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "a.example.io", "b.example.io", "c.example.io")},
+			},
+			b: pie.Model{
+				Exports: []pie.Export{
+					export("a.example.io", nil, claim("", "secrets"), claim("", "configmaps")), export("b.example.io", nil, claim("", "secrets")),
+					export("c.example.io", nil, claim("", "configmaps")),
+				},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "a.example.io", "b.example.io", "c.example.io")},
+			},
+			want: `added: APIExport c.example.io
+added: claim by c.example.io on configmaps: get
+added: notice: APIExports a.example.io and c.example.io both claim configmaps where account binds both
+`,
+		},
+		{
+			name: "about different exports: one that may write kcp's own resources",
+			a: pie.Model{
+				Exports:        []pie.Export{export("a.example.io", nil, pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}}), export("b.example.io", nil)},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "a.example.io", "b.example.io")},
+			},
+			b: pie.Model{
+				Exports: []pie.Export{
+					export("a.example.io", nil, pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}}),
+					export("b.example.io", nil, pie.Claim{Group: "core.kcp.io", Resource: "logicalclusters", Verbs: []string{"update"}}),
+				},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "a.example.io", "b.example.io")},
+			},
+			want: `added: claim by b.example.io on logicalclusters.core.kcp.io: update
+added: notice: APIExport b.example.io may write kcp's own resources where account binds it: update on logicalclusters
+`,
+		},
+		{
+			name: "about different exports claimed from: a claim on what another serves, and one with a literal identity hash",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{
+				core, export("ui.example.io", []pie.Resource{panels}),
+				export("terminal.example.io", nil, literal(claim("core.example.io", "widgets"))),
+			}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{
+				core, export("ui.example.io", []pie.Resource{panels}),
+				export("terminal.example.io", nil, literal(claim("core.example.io", "widgets")), literal(claim("ui.example.io", "panels"))),
+			}},
+			want: `added: claim by terminal.example.io on panels.ui.example.io: get
+added: notice: APIExport terminal.example.io claims panels from ui.example.io
+added: notice: APIExport terminal.example.io claims panels with a literal identity hash, but ui.example.io names no identity secret, so kcp generates a new identity for it in every installation
 `,
 		},
 	}
@@ -2683,6 +2914,169 @@ func TestRenderOverviewDiffD2WrapsTagsToTheTitle(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, want)
 		}
+	}
+}
+
+func TestRenderOverviewDiffD2SaysWhatWorkspacesATypeAlreadyHasGet(t *testing.T) {
+	core := pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io"}
+	fga := pie.Export{Path: "pms/fga.yaml", Doc: 1, Name: "fga.example.io"}
+	wt := func(name string, exports ...string) pie.WorkspaceType {
+		t := pie.WorkspaceType{Path: "types/" + name + ".yaml", Doc: 1, Name: name}
+		for _, e := range exports {
+			t.Binds = append(t.Binds, pie.ExportRef{Path: "root:pms", Name: e})
+		}
+		return t
+	}
+	maintained := func(t pie.WorkspaceType) pie.WorkspaceType {
+		t.Maintains = true
+		return t
+	}
+	extending := func(t pie.WorkspaceType, base string) pie.WorkspaceType {
+		t.Extends = append(t.Extends, pie.TypeRef{Path: "root", Name: base})
+		return t
+	}
+	model := func(exports []pie.Export, types ...pie.WorkspaceType) pie.Model {
+		return pie.Model{Exports: exports, WorkspaceTypes: types}
+	}
+	tests := []struct {
+		name string
+		a, b pie.Model
+		want string
+	}{
+		{
+			name: "a type of both trees that starts binding an export by default gets it only in the workspaces kcp creates from then on",
+			a:    model([]pie.Export{core}, wt("org")),
+			b:    model([]pie.Export{core}, wt("org", "core.example.io")),
+			want: "bound at +org (new workspaces only)",
+		},
+		{
+			name: "unless the type maintains its default bindings",
+			a:    model([]pie.Export{core}, wt("org")),
+			b:    model([]pie.Export{core}, maintained(wt("org", "core.example.io"))),
+			want: "bound at +org",
+		},
+		{
+			name: "a type that stops binding an export leaves its workspaces the binding, maintained or not, as kcp deletes none",
+			a:    model([]pie.Export{core}, wt("org", "core.example.io")),
+			b:    model([]pie.Export{core}, maintained(wt("org"))),
+			want: "bound at −org (existing workspaces keep it)",
+		},
+		{
+			name: "an export only B has, bound by a type of both trees, says so without a sign",
+			a:    model([]pie.Export{core}, wt("org")),
+			b:    model([]pie.Export{core, fga}, wt("org", "fga.example.io")),
+			want: "bound at org (new workspaces only)",
+		},
+		{
+			name: "a binding a type gets through a type it extends follows the lifecycle of the type that declares it, not its own",
+			a:    model([]pie.Export{core}, maintained(extending(wt("org"), "base")), wt("base")),
+			b:    model([]pie.Export{core}, maintained(extending(wt("org"), "base")), wt("base", "core.example.io")),
+			want: "bound at +org (new workspaces only)",
+		},
+		{
+			name: "so a declaring type that maintains its bindings reaches the existing workspaces of the types extending it",
+			a:    model([]pie.Export{core}, extending(wt("org"), "base"), wt("base")),
+			b:    model([]pie.Export{core}, extending(wt("org"), "base"), maintained(wt("base", "core.example.io"))),
+			want: "bound at +org",
+		},
+		{
+			name: "copies of a type count as their first, as in the text diff",
+			a:    model([]pie.Export{core}, wt("org")),
+			b: model([]pie.Export{core}, wt("org"),
+				pie.WorkspaceType{Path: "types/copy.yaml", Doc: 1, Name: "org", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}}),
+			want: "bound at +org",
+		},
+		{
+			name: "an export of one name bound from two workspaces counts once, by the binding a type declares itself before those of its bases",
+			a:    model([]pie.Export{core}, extending(wt("org"), "base"), wt("base")),
+			b: model([]pie.Export{core}, extending(wt("org", "core.example.io"), "base"),
+				maintained(pie.WorkspaceType{Path: "types/base.yaml", Doc: 1, Name: "base", Binds: []pie.ExportRef{{Path: "root:other", Name: "core.example.io"}}})),
+			want: "bound at +org (new workspaces only)",
+		},
+		{
+			name: "a binding both trees have is no change, though tree A has its export outside the tree",
+			a:    model([]pie.Export{core}, wt("org", "fga.example.io")),
+			b:    model([]pie.Export{core, fga}, wt("org", "fga.example.io")),
+			want: "bound at org",
+		},
+		{
+			name: "a directory of APIBinding files creates what it binds when it is applied, so says nothing",
+			a:    pie.Model{Exports: []pie.Export{core}, APIBindings: []pie.APIBinding{{Path: "x/y/fga.yaml", Doc: 1, Name: "fga", Export: pie.ExportRef{Path: "root:pms", Name: "fga.example.io"}}}},
+			b: pie.Model{Exports: []pie.Export{core}, APIBindings: []pie.APIBinding{
+				{Path: "x/y/fga.yaml", Doc: 1, Name: "fga", Export: pie.ExportRef{Path: "root:pms", Name: "fga.example.io"}},
+				{Path: "x/y/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
+			}},
+			want: "bound at +y",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(pie.RenderOverviewDiffD2(tt.a, tt.b))
+			if want := fmt.Sprintf("\"story\": %q {class: story}", tt.want); !strings.Contains(got, want) {
+				t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, want)
+			}
+		})
+	}
+}
+
+func TestRenderOverviewDiffD2SaysWhatAnExportKeepsServingToItsBindings(t *testing.T) {
+	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")}
+	things := pie.Resource{Group: "core.example.io", Name: "things"}
+	export := func(name string, resources ...pie.Resource) pie.Export {
+		return pie.Export{Path: "pms/" + name + ".yaml", Doc: 1, Name: name, Resources: resources}
+	}
+	org := func(exports ...string) pie.WorkspaceType {
+		t := pie.WorkspaceType{Path: "types/org.yaml", Doc: 1, Name: "org"}
+		for _, e := range exports {
+			t.Binds = append(t.Binds, pie.ExportRef{Path: "root:pms", Name: e})
+		}
+		return t
+	}
+	readsGadgets := pie.Claim{Group: "core.example.io", Resource: "gadgets", Verbs: []string{"get"}}
+	tests := []struct {
+		name string
+		a, b pie.Model
+		want string
+	}{
+		{
+			name: "an export of both trees keeps serving the kinds it stops serving to the workspaces that bind it already, named and sorted",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource(), gadgetResource(), things)},
+				WorkspaceTypes: []pie.WorkspaceType{org("core.example.io")}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource()), export("fga.example.io", gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{org("core.example.io")}},
+			want: "bound at org\nexisting workspaces keep Gadget, things",
+		},
+		{
+			name: "under where it is bound, before what it needs of other exports",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{withClaims(export("core.example.io", widgetResource(), gadgetResource()), readsGadgets)},
+				WorkspaceTypes: []pie.WorkspaceType{org("core.example.io")}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{withClaims(export("core.example.io", widgetResource()), readsGadgets), export("fga.example.io", gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{org("core.example.io")}},
+			want: "bound at org\nexisting workspaces keep Gadget\n+reads gadgets from fga.example.io",
+		},
+		{
+			name: "an export that moved to another workspace counts what it served where it was",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource(), gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{org("core.example.io")}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/org.yaml", Doc: 1, Name: "org", Binds: []pie.ExportRef{{Path: "root:other", Name: "core.example.io"}}}}},
+			want: "bound at org\nexisting workspaces keep Gadget",
+		},
+		{
+			name: "an export only A has says nothing of its kinds, as the tree no longer says whether it exists",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource()), export("old.example.io", gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{org("old.example.io")}},
+			b:    pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", widgetResource())}, WorkspaceTypes: []pie.WorkspaceType{org()}},
+			want: "bound at org (existing workspaces keep it)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(pie.RenderOverviewDiffD2(tt.a, tt.b))
+			if want := fmt.Sprintf("\"story\": %q {class: story}", tt.want); !strings.Contains(got, want) {
+				t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, want)
+			}
+		})
 	}
 }
 
@@ -4187,7 +4581,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    "story": "bound at account\nexisting workspaces keep gadgets" {class: story}
   }
   "workspace:root:pms"."apiexport:other.example.io": {
     label: "other.example.io"
@@ -4195,7 +4589,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     style.stroke: "#1098ad"
     style.fill: "#e3fafc"
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    "story": "bound at account (new workspaces only)" {class: story}
   }
 }
 "consumers": {
@@ -4322,7 +4716,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     style.stroke: "#1098ad"
     style.fill: "#e3fafc"
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    "story": "bound at account (new workspaces only)" {class: story}
   }
 }
 "consumers": {
@@ -4478,7 +4872,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account, org, y, −guest" {class: story}
+    "story": "bound at account, org, y, −guest (existing workspaces keep it)\nexisting workspaces keep anchors, gadgets" {class: story}
   }
   "workspace:root:pms"."apiexport:tools.example.io": {
     label: "tools.example.io"
@@ -4486,7 +4880,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     style.stroke: "#1098ad"
     style.fill: "#e3fafc"
     grid-columns: 1
-    "story": "bound at org, guest, team" {class: story}
+    "story": "bound at org (new workspaces only), guest (new workspaces only), team" {class: story}
   }
 }
 "consumers": {

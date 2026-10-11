@@ -73,7 +73,7 @@ func TestDiffReadsTreesFromGit(t *testing.T) {
 		code := run(context.Background(), []string{"--diff", a, b}, &stdout, &stderr)
 		return code, stdout.String(), stderr.String()
 	}
-	const added = "added: APIExport other.example.io\nadded: kind widgets.core.example.io in other.example.io\n"
+	const added = "added: APIExport other.example.io\nadded: kind widgets.core.example.io in other.example.io\nadded: notice: API group core.example.io is served by 2 APIExports: core.example.io, other.example.io\n"
 
 	t.Run("REF:PATH reads a commit of the repository it runs in, and leaves the checkout and no temporary files", func(t *testing.T) {
 		repo := newRepo(t)
@@ -399,7 +399,7 @@ spec: {}
 
 		code := run(context.Background(), []string{"--diff", a, b + "/"}, &stdout, &stderr)
 
-		want := "removed: APIExport core.example.io\nadded: APIExport other.example.io\nmoved: kind widgets.core.example.io from core.example.io to other.example.io\nadded: WorkspaceType security\n"
+		want := "removed: APIExport core.example.io\nadded: APIExport other.example.io\nmoved: kind widgets.core.example.io from core.example.io to other.example.io\nadded: WorkspaceType security\nadded: notice: WorkspaceType security binds no APIExport\nadded: notice: APIExport other.example.io is bound by no WorkspaceType or APIBinding in the tree\n"
 		if code != 0 || stdout.String() != want || !strings.HasPrefix(stderr.String(), "warning: "+b+"/ws/broken.yaml#1: ") || strings.Count(stderr.String(), "\n") != 1 {
 			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0, stdout:\n%s\nand one warning for %s/ws/broken.yaml#1", code, stdout.String(), stderr.String(), want, b)
 		}

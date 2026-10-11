@@ -34,12 +34,20 @@ func RenderDiff(a, b Model) []byte {
 		if len(came) == 0 {
 			kind = kindNamed(resource, a)
 		}
+		// kcp never takes a resource out of a binding (kcp v0.32.3), so an export of both trees keeps
+		// serving what it stops serving to the workspaces that bind it already.
+		kept := func(exports ...string) string {
+			if slices.ContainsFunc(exports, func(e string) bool { return slices.Contains(after, e) }) {
+				return ", existing workspaces keep it"
+			}
+			return ""
+		}
 		if len(left) > 0 && len(came) > 0 {
-			fmt.Fprintf(&out, "moved: kind %s from %s to %s\n", kind, strings.Join(left, " and "), strings.Join(came, " and "))
+			fmt.Fprintf(&out, "moved: kind %s from %s to %s%s\n", kind, strings.Join(left, " and "), strings.Join(came, " and "), kept(left...))
 			continue
 		}
 		for _, e := range left {
-			fmt.Fprintf(&out, "removed: kind %s from %s\n", kind, e)
+			fmt.Fprintf(&out, "removed: kind %s from %s%s\n", kind, e, kept(e))
 		}
 		for _, e := range came {
 			fmt.Fprintf(&out, "added: kind %s in %s\n", kind, e)
@@ -47,6 +55,7 @@ func RenderDiff(a, b Model) []byte {
 	}
 	diffClaims(&out, a, b)
 	diffConsumers(&out, a, b)
+	diffNotices(&out, a, b)
 	return out.Bytes()
 }
 
@@ -212,6 +221,38 @@ func diffConsumers(out *bytes.Buffer, a, b Model) {
 		if change := lossesAndGains(kindsChange(names, kindsInA[p.id], kindsInB[p.id])); change != "" {
 			name := strings.TrimPrefix(p.id, p.class+":")
 			fmt.Fprintf(out, "changed: %s %s\n", consumerBindings{class: p.class, name: name}, change)
+		}
+	}
+}
+
+// diffNotices lists the notices only a has as removed, then in b's order those a has in other words
+// as changed and those a has not as added. A notice is a fact, not a fault, so none is resolved. Notices are told apart by what they are about; of copies of
+// a WorkspaceType, each with its notice, the first counts.
+func diffNotices(out *bytes.Buffer, a, b Model) {
+	about := func(n notice) func(notice) bool { return func(x notice) bool { return x.about == n.about } }
+	firsts := func(all []notice) []notice {
+		var ns []notice
+		for _, n := range all {
+			if !slices.ContainsFunc(ns, about(n)) {
+				ns = append(ns, n)
+			}
+		}
+		return ns
+	}
+	before, after := firsts(notices(a)), firsts(notices(b))
+	for _, n := range before {
+		if !slices.ContainsFunc(after, about(n)) {
+			fmt.Fprintf(out, "removed: notice: %s\n", n.Reason)
+		}
+	}
+	for _, n := range after {
+		i := slices.IndexFunc(before, about(n))
+		if i < 0 {
+			fmt.Fprintf(out, "added: notice: %s\n", n.Reason)
+			continue
+		}
+		if before[i].Reason != n.Reason {
+			fmt.Fprintf(out, "changed: notice: %s\n", n.Reason)
 		}
 	}
 }

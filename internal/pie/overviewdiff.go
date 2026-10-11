@@ -1,6 +1,7 @@
 package pie
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
 	"slices"
@@ -126,7 +127,62 @@ func (o overview) draws(p presence) bool {
 // moved to another file or workspace is no change; directories of APIBinding files by path, kinds by
 // resource.
 func RenderOverviewDiffD2(a, b Model) []byte {
-	return diffOverviews(overviewOf(a, true), overviewOf(b, true)).d2()
+	u := diffOverviews(overviewOf(a, true), overviewOf(b, true))
+	notes := lifecycleNotes(a, b)
+	for i, e := range u.exports {
+		bound := slices.Clone(e.bound)
+		for j, p := range bound {
+			bound[j].note = notes[bindingKey{consumer: p.id, export: e.keys[len(e.keys)-1]}]
+		}
+		u.exports[i].bound = bound
+	}
+	return u.d2()
+}
+
+// bindingKey is a binding of an export by a consumer, by their ids in the overview of a diff.
+type bindingKey struct{ consumer, export string }
+
+// lifecycleNotes says what kcp does in the workspaces a WorkspaceType of both trees already has
+// about an export the type starts or stops binding, itself or through a type it extends. kcp creates
+// default bindings with a workspace, and in existing workspaces only for a type declaring them with
+// defaultAPIBindingLifecycle: Maintain; it deletes none (kcp v0.32.3).
+func lifecycleNotes(a, b Model) map[bindingKey]string {
+	// declarers lists, by export name, the type declaring the binding a workspace of t gets.
+	declarers := func(t WorkspaceType, types []WorkspaceType) map[string]string {
+		by := map[string]string{}
+		for _, bd := range bindingsOf(t, types) {
+			if _, ok := by[bd.ref.Name]; !ok {
+				by[bd.ref.Name] = cmp.Or(bd.via, t.Name)
+			}
+		}
+		return by
+	}
+	notes := map[bindingKey]string{}
+	for _, t := range b.WorkspaceTypes {
+		before, ok := typeNamed(t.Name, a.WorkspaceTypes)
+		if !ok {
+			continue
+		}
+		after, _ := typeNamed(t.Name, b.WorkspaceTypes)
+		inA, inB := declarers(before, a.WorkspaceTypes), declarers(after, b.WorkspaceTypes)
+		key := func(export string) bindingKey {
+			return bindingKey{consumer: "workspacetype:" + t.Name, export: "apiexport:" + export}
+		}
+		for export, by := range inB {
+			if _, ok := inA[export]; ok {
+				continue
+			}
+			if declarer, _ := typeNamed(by, b.WorkspaceTypes); !declarer.Maintains {
+				notes[key(export)] = "new workspaces only"
+			}
+		}
+		for export := range inA {
+			if _, ok := inB[export]; !ok {
+				notes[key(export)] = "existing workspaces keep it"
+			}
+		}
+	}
+	return notes
 }
 
 // diffOverviews merges the overviews of two trees, keyed by name: b's boxes and arrows in b's order,
@@ -138,6 +194,8 @@ func diffOverviews(a, b overview) overview {
 	name := func(e exportBox) string { return e.keys[len(e.keys)-1] }
 	at := func(e exportBox) string { return d2Path(append([]string{exportsColumn}, e.keys...)...) }
 	moved := map[string]string{}
+	names := kindNames(u.areas, func(k kindBox) string { return k.name })
+	servedInA, servedInB := a.served(), b.served()
 	for _, e := range b.exports {
 		e.in = onlyInB
 		if i := slices.IndexFunc(a.exports, func(x exportBox) bool { return name(x) == name(e) }); i >= 0 {
@@ -148,6 +206,7 @@ func diffOverviews(a, b overview) overview {
 				func(p *consumerRef, in presence) { p.name = presenceSigns[in] + p.name })
 			e.needs = merge(a.exports[i].needs, e.needs, func(line string) string { return line },
 				func(line *string, in presence) { *line = presenceSigns[in] + *line })
+			e.kept, _ = kindsChange(names, servedInA[at(a.exports[i])], servedInB[at(e)])
 		}
 		if !slices.ContainsFunc(u.exports, func(x exportBox) bool { return name(x) == name(e) }) {
 			u.exports = append(u.exports, e)
@@ -167,7 +226,7 @@ func diffOverviews(a, b overview) overview {
 
 	u.outside = merge(a.outside, b.outside, func(x outsideBox) string { return x.name }, func(x *outsideBox, p presence) { x.in = p })
 	u.consumers = merge(a.consumers, b.consumers, func(x consumerBox) string { return x.id }, func(x *consumerBox, p presence) { x.in = p })
-	kindsInA, kindsInB, names := a.kindsAt(), b.kindsAt(), kindNames(u.areas, func(k kindBox) string { return k.name })
+	kindsInA, kindsInB := a.kindsAt(), b.kindsAt()
 	for i, p := range u.consumers {
 		if p.in == inBoth {
 			if lost, got := kindsChange(names, kindsInA[p.id], kindsInB[p.id]); len(lost)+len(got) > 0 {
@@ -190,14 +249,24 @@ func diffOverviews(a, b overview) overview {
 	return u
 }
 
+// served lists, by export, the kinds it serves, both by their d2 paths.
+func (o overview) served() map[string]map[string]bool {
+	served := map[string]map[string]bool{}
+	for _, e := range o.edges {
+		if e.r != servesKind {
+			continue
+		}
+		if served[e.from] == nil {
+			served[e.from] = map[string]bool{}
+		}
+		served[e.from][e.to] = true
+	}
+	return served
+}
+
 // kindsAt lists, by consumer, the kinds it gets, by their d2 paths: those the exports it binds serve.
 func (o overview) kindsAt() map[string]map[string]bool {
-	served := map[string][]string{}
-	for _, e := range o.edges {
-		if e.r == servesKind {
-			served[e.from] = append(served[e.from], e.to)
-		}
-	}
+	served := o.served()
 	kinds := map[string]map[string]bool{}
 	for _, p := range o.consumers {
 		kinds[p.id] = map[string]bool{}
@@ -206,7 +275,7 @@ func (o overview) kindsAt() map[string]map[string]bool {
 			if e.from != at {
 				continue
 			}
-			for _, k := range served[e.to] {
+			for k := range served[e.to] {
 				kinds[p.id][k] = true
 			}
 		}

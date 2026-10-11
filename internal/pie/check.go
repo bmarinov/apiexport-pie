@@ -24,12 +24,15 @@ func Check(m Model) []Diagnostic {
 			diags = append(diags, Diagnostic{Level: Warning, Path: later.Path, Doc: later.Doc, Reason: c.reason("APIBindings in " + dir.dir + " bind")})
 		}
 	}
-	return append(diags, notices(m)...)
+	for _, n := range notices(m) {
+		diags = append(diags, n.Diagnostic)
+	}
+	return diags
 }
 
 // notices points out what is worth a look about how the APIs are cut and where their claims reach.
 // Each is a fact about the manifests; whether it is wrong is the designer's call.
-func notices(m Model) []Diagnostic {
+func notices(m Model) []notice {
 	// Copies of an export share its name and count once, from the first.
 	var exports []Export
 	for _, e := range m.Exports {
@@ -40,16 +43,23 @@ func notices(m Model) []Diagnostic {
 	return append(cohesionNotices(m, exports), reachNotices(m, exports)...)
 }
 
-func noticeAt(path string, doc int, format string, args ...any) Diagnostic {
-	return Diagnostic{Level: Notice, Path: path, Doc: doc, Reason: fmt.Sprintf(format, args...)}
+// notice is a Notice and what it is about, by which a diff tells notices apart: a notice about the
+// same thing may read differently in another tree.
+type notice struct {
+	about string
+	Diagnostic
+}
+
+func noticeAbout(about, path string, doc int, format string, args ...any) notice {
+	return notice{about: about, Diagnostic: Diagnostic{Level: Notice, Path: path, Doc: doc, Reason: fmt.Sprintf(format, args...)}}
 }
 
 // cohesionNotices points out an export serving several API groups, a group split across exports, a
 // WorkspaceType that binds nothing of the tree, and an export nothing binds.
-func cohesionNotices(m Model, exports []Export) []Diagnostic {
-	var diags []Diagnostic
-	notice := func(path string, doc int, format string, args ...any) {
-		diags = append(diags, noticeAt(path, doc, format, args...))
+func cohesionNotices(m Model, exports []Export) []notice {
+	var diags []notice
+	note := func(about, path string, doc int, format string, args ...any) {
+		diags = append(diags, noticeAbout(about, path, doc, format, args...))
 	}
 
 	var groups []string
@@ -62,7 +72,7 @@ func cohesionNotices(m Model, exports []Export) []Diagnostic {
 			}
 		}
 		if len(own) > 1 {
-			notice(e.Path, e.Doc, "APIExport %s serves %d API groups: %s", e.Name, len(own), strings.Join(own, ", "))
+			note("groups of "+e.Name, e.Path, e.Doc, "APIExport %s serves %d API groups: %s", e.Name, len(own), strings.Join(own, ", "))
 		}
 		for _, g := range own {
 			if len(servingGroup[g]) == 0 {
@@ -77,7 +87,7 @@ func cohesionNotices(m Model, exports []Export) []Diagnostic {
 			for _, e := range serving {
 				names = append(names, e.Name)
 			}
-			notice(serving[1].Path, serving[1].Doc, "API group %s is served by %d APIExports: %s", g, len(serving), strings.Join(names, ", "))
+			note("exports of "+g, serving[1].Path, serving[1].Doc, "API group %s is served by %d APIExports: %s", g, len(serving), strings.Join(names, ", "))
 		}
 	}
 
@@ -97,9 +107,9 @@ func cohesionNotices(m Model, exports []Export) []Diagnostic {
 		}
 		switch {
 		case len(bindings) == 0:
-			notice(t.Path, t.Doc, "WorkspaceType %s binds no APIExport", t.Name)
+			note("bindings of "+t.Name, t.Path, t.Doc, "WorkspaceType %s binds no APIExport", t.Name)
 		case !inside:
-			notice(t.Path, t.Doc, "WorkspaceType %s binds only APIExports from outside the tree: %s", t.Name, strings.Join(outside, ", "))
+			note("bindings of "+t.Name, t.Path, t.Doc, "WorkspaceType %s binds only APIExports from outside the tree: %s", t.Name, strings.Join(outside, ", "))
 		}
 	}
 	for _, ab := range m.APIBindings {
@@ -111,7 +121,7 @@ func cohesionNotices(m Model, exports []Export) []Diagnostic {
 	}
 	for _, e := range exports {
 		if !bound[e.Name] {
-			notice(e.Path, e.Doc, "APIExport %s is bound by no WorkspaceType or APIBinding in the tree", e.Name)
+			note("binders of "+e.Name, e.Path, e.Doc, "APIExport %s is bound by no WorkspaceType or APIBinding in the tree", e.Name)
 		}
 	}
 	return diags
