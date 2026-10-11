@@ -72,7 +72,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if *diff {
-		before, after, code := scanTrees(ctx, flags.Arg(0), flags.Arg(1), *verbose, stderr)
+		// The text diff compares what Check finds; a picture has no list of it.
+		compared := !*surface && in.style != "overview"
+		before, after, code := scanTrees(ctx, flags.Arg(0), flags.Arg(1), *verbose, compared, stderr)
 		if code != exitOK {
 			return code
 		}
@@ -176,8 +178,8 @@ type invocation struct {
 
 // scanTrees scans tree a and tree b, each a directory or a commit (see openTree). Warnings name the
 // tree in front of the path, since both trees have the same paths; notices are not printed, they are
-// what may change.
-func scanTrees(ctx context.Context, a, b string, verbose bool, stderr io.Writer) (pie.Model, pie.Model, int) {
+// what may change. compared leaves out the warnings Check finds, which the text diff compares.
+func scanTrees(ctx context.Context, a, b string, verbose, compared bool, stderr io.Writer) (pie.Model, pie.Model, int) {
 	var models []pie.Model
 	for _, tree := range []string{a, b} {
 		dir, cleanup, err := openTree(ctx, tree)
@@ -193,7 +195,10 @@ func scanTrees(ctx context.Context, a, b string, verbose bool, stderr io.Writer)
 			report(stderr, "apiexport-pie: %s: %v", tree, err)
 			return pie.Model{}, pie.Model{}, exitError
 		}
-		for _, d := range append(diags, pie.Check(model)...) {
+		if !compared {
+			diags = append(diags, pie.Check(model)...)
+		}
+		for _, d := range diags {
 			if d.Level == pie.Warning || d.Level == pie.Skipped && verbose {
 				d.Path = strings.TrimSuffix(tree, "/") + "/" + d.Path
 				report(stderr, "%s", d)

@@ -157,10 +157,24 @@ func RenderSurface(m Model) []byte {
 			b.WriteString("| " + strings.Join(cells, " | ") + " |\n")
 		}
 	}
-	if notes := notices(m); len(notes) > 0 {
-		b.WriteString("\n**Worth a look**\n\n")
-		for _, n := range notes {
-			b.WriteString("- " + n.Reason + "\n")
+	var warnings, notes []string
+	for _, f := range findings(m) {
+		if f.Level == Warning {
+			warnings = append(warnings, f.Reason)
+			continue
+		}
+		notes = append(notes, f.Reason)
+	}
+	for _, list := range []struct {
+		head  string
+		lines []string
+	}{{"Warnings", warnings}, {"Worth a look", notes}} {
+		if len(list.lines) == 0 {
+			continue
+		}
+		b.WriteString("\n**" + list.head + "**\n\n")
+		for _, line := range list.lines {
+			b.WriteString("- " + line + "\n")
 		}
 	}
 	return b.Bytes()

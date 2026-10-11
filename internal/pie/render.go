@@ -265,26 +265,41 @@ func typeLabel(t WorkspaceType, repeated bool, types []WorkspaceType, workspaces
 		label += " · " + location(t.Path, t.Doc)
 	}
 	if len(t.Extends) > 0 {
-		bases := make([]string, 0, len(t.Extends))
-		for _, base := range t.Extends {
-			name := base.Name
-			if _, ok := typeNamed(base.Name, types); !ok {
-				name += " (not in tree)"
-			}
-			bases = append(bases, name)
-		}
-		label += " · extends " + strings.Join(bases, ", ")
+		label += " · extends " + baseNames(t, types)
 	}
+	if named := workspacesOf(t, workspaces); named != "" {
+		label += " · " + named
+	}
+	return label
+}
+
+// baseNames names the types t extends, those not in the tree marked so.
+func baseNames(t WorkspaceType, types []WorkspaceType) string {
+	bases := make([]string, 0, len(t.Extends))
+	for _, base := range t.Extends {
+		name := base.Name
+		if _, ok := typeNamed(base.Name, types); !ok {
+			name += " (not in tree)"
+		}
+		bases = append(bases, name)
+	}
+	return strings.Join(bases, ", ")
+}
+
+// workspacesOf names the workspaces in the tree of t's type: "workspace orgs", "workspaces a, b", or
+// nothing.
+func workspacesOf(t WorkspaceType, workspaces []Workspace) string {
 	var named []string
 	for _, w := range workspaces {
 		if w.Type.Name == t.Name {
 			named = append(named, w.Name)
 		}
 	}
-	if len(named) == 1 {
-		label += " · workspace " + named[0]
-	} else if len(named) > 1 {
-		label += " · workspaces " + strings.Join(named, ", ")
+	switch len(named) {
+	case 0:
+		return ""
+	case 1:
+		return "workspace " + named[0]
 	}
-	return label
+	return "workspaces " + strings.Join(named, ", ")
 }

@@ -206,6 +206,10 @@ func diffOverviews(a, b overview) overview {
 				func(p *consumerRef, in presence) { p.name = presenceSigns[in] + p.name })
 			e.needs = merge(a.exports[i].needs, e.needs, func(line string) string { return line },
 				func(line *string, in presence) { *line = presenceSigns[in] + *line })
+			e.open = merge(a.exports[i].open, e.open, func(line string) string { return line },
+				func(line *string, in presence) { *line = presenceSigns[in] + *line })
+			e.warnings = merge(a.exports[i].warnings, e.warnings, func(line string) string { return line },
+				func(line *string, in presence) { *line = presenceSigns[in] + *line })
 			e.kept, _ = kindsChange(names, servedInA[at(a.exports[i])], servedInB[at(e)])
 		}
 		if !slices.ContainsFunc(u.exports, func(x exportBox) bool { return name(x) == name(e) }) {

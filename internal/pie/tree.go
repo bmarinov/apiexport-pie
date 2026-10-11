@@ -133,11 +133,13 @@ func placesOf(m Model) []place {
 			label += " · " + location(t.Path, t.Doc)
 		}
 		if len(t.Extends) > 0 {
-			bases := make([]string, len(t.Extends))
-			for k, e := range t.Extends {
-				bases[k] = e.Name
-			}
-			label += "\nextends " + strings.Join(bases, ", ")
+			label += "\nextends " + baseNames(t, types)
+		}
+		for _, line := range lifecycleOf(t, types) {
+			label += "\n" + line
+		}
+		if named := workspacesOf(t, m.Workspaces); named != "" {
+			label += "\n" + named
 		}
 		places = append(places, place{t: t, label: label})
 	}

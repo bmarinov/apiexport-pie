@@ -405,6 +405,34 @@ spec: {}
 		}
 	})
 
+	t.Run("with --diff compares the warnings about the manifests on stdout rather than repeat each tree's on stderr", func(t *testing.T) {
+		a := writeTree(t, map[string]string{"ws/export.yaml": exportManifest})
+		b := writeTree(t, map[string]string{"ws/export.yaml": "apiVersion: apis.kcp.io/v1alpha1\nkind: APIExport\nmetadata:\n  name: core.example.io\nspec:\n  latestResourceSchemas:\n  - v1.widgets.core.example.io\n"})
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"--diff", a, b}, &stdout, &stderr)
+
+		want := "added: warning: APIExport core.example.io: apis.kcp.io/v1alpha1 is deprecated\n"
+		if code != 0 || stdout.String() != want || stderr.Len() != 0 {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0, stdout:\n%s\nand nothing on stderr", code, stdout.String(), stderr.String(), want)
+		}
+	})
+
+	t.Run("with --diff and a picture, each tree's warnings still go to stderr, as the picture has no list of them", func(t *testing.T) {
+		a := writeTree(t, map[string]string{"ws/export.yaml": exportManifest})
+		b := writeTree(t, map[string]string{"ws/export.yaml": "apiVersion: apis.kcp.io/v1alpha1\nkind: APIExport\nmetadata:\n  name: core.example.io\nspec:\n  latestResourceSchemas:\n  - v1.widgets.core.example.io\n"})
+		for _, picture := range [][]string{{"--surface"}, {"--style", "overview"}} {
+			var stdout, stderr bytes.Buffer
+
+			code := run(context.Background(), append(append([]string{"--diff"}, picture...), a, b), &stdout, &stderr)
+
+			want := "warning: " + b + "/ws/export.yaml#1: APIExport core.example.io: apis.kcp.io/v1alpha1 is deprecated\n"
+			if code != 0 || stderr.String() != want {
+				t.Errorf("run() with %v = %d\nstderr:\n%s\nwant 0 and stderr:\n%s", picture, code, stderr.String(), want)
+			}
+		}
+	})
+
 	t.Run("with --diff --surface prints both tables as one in d2, or writes it to FILE", func(t *testing.T) {
 		a := writeTree(t, map[string]string{"ws/export.yaml": exportManifest})
 		b := writeTree(t, map[string]string{"ws/other.yaml": strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1)})
@@ -434,7 +462,11 @@ spec: {}
 		fileCode := run(context.Background(), []string{"--diff", "--style", "overview", "-o", file, a, b}, &toFile, &stderr)
 
 		written, err := os.ReadFile(file)
-		const added = `"apiexport:other.example.io": "other.example.io" {class: export; style.stroke: "#1098ad"; style.fill: "#e3fafc"}`
+		const added = `"apiexport:other.example.io": {
+    label: "other.example.io"
+    class: export
+    style.stroke: "#1098ad"
+    style.fill: "#e3fafc"`
 		if code != 0 || !strings.HasPrefix(stdout.String(), "vars: {") || !strings.Contains(stdout.String(), added) || stderr.Len() != 0 {
 			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0 and an overview with %q", code, stdout.String(), stderr.String(), added)
 		}

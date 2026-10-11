@@ -7,32 +7,93 @@ import (
 	"strings"
 )
 
-// Check warns about the exports a consumer binds that kcp refuses together, of which a workspace
-// gets only one; RenderD2 marks the same conflicts in red. It then notes what is worth a look.
+// Check warns about what is wrong with an APIExport as written, then about the exports a consumer
+// binds that kcp refuses together, of which a workspace gets only one; RenderD2 marks the same
+// conflicts in red. It then notes what is worth a look.
 func Check(m Model) []Diagnostic {
-	resources := servedByExport(m.Exports, m.Schemas)
 	var diags []Diagnostic
+	for _, f := range findings(m) {
+		diags = append(diags, f.Diagnostic)
+	}
+	return diags
+}
+
+// findings are what Check reports, each with what it is about: the warnings, then the notices.
+func findings(m Model) []finding {
+	var fs []finding
+	warnings := exportWarnings(m)
+	for _, e := range m.Exports {
+		for _, w := range warnings[location(e.Path, e.Doc)] {
+			fs = append(fs, finding{about: w.about, Diagnostic: Diagnostic{Level: Warning, Path: e.Path, Doc: e.Doc, Reason: "APIExport " + e.Name + ": " + w.reason}})
+		}
+	}
+	// A refusal is about the very pair and resources its reason names, so the reason tells it apart.
+	refusal := func(path string, doc int, reason string) finding {
+		return finding{about: "refusal: " + reason, Diagnostic: Diagnostic{Level: Warning, Path: path, Doc: doc, Reason: reason}}
+	}
+	resources := servedByExport(m.Exports, m.Schemas)
 	for _, t := range m.WorkspaceTypes {
 		for _, c := range pairsOf(bindingsOf(t, m.WorkspaceTypes), resources) {
-			diags = append(diags, Diagnostic{Level: Warning, Path: t.Path, Doc: t.Doc, Reason: c.reason("WorkspaceType " + t.Name + " binds")})
+			fs = append(fs, refusal(t.Path, t.Doc, c.reason("WorkspaceType "+t.Name+" binds")))
 		}
 	}
 	for _, dir := range bindingsByDir(m.APIBindings) {
 		for _, c := range pairsOf(dir.bound, resources) {
 			// A directory is no single document, so the warning points at the later binding of the two.
 			later := firstBindingOf(c.other, dir.dir, m.APIBindings)
-			diags = append(diags, Diagnostic{Level: Warning, Path: later.Path, Doc: later.Doc, Reason: c.reason("APIBindings in " + dir.dir + " bind")})
+			fs = append(fs, refusal(later.Path, later.Doc, c.reason("APIBindings in "+dir.dir+" bind")))
 		}
 	}
-	for _, n := range notices(m) {
-		diags = append(diags, n.Diagnostic)
+	return append(fs, notices(m)...)
+}
+
+// exportWarning is something wrong with an export as written: what it is about, by which a diff
+// tells warnings apart, and the reason, without the export's name, as its box in the overview says it.
+type exportWarning struct{ about, reason string }
+
+// exportWarnings says what is wrong with each export of m as written, by the document it is in.
+func exportWarnings(m Model) map[string][]exportWarning {
+	serving := exportsServing(m.Exports)
+	warnings := map[string][]exportWarning{}
+	for _, e := range m.Exports {
+		at := location(e.Path, e.Doc)
+		// kcp v0.32.3 still serves v1alpha1 but deprecates it (pkg/admission/apiexport); a v1alpha1
+		// claim has no verbs, and kcp converts it to all of them.
+		if e.V1alpha1 {
+			reason := "apis.kcp.io/v1alpha1 is deprecated"
+			if len(e.Claims) > 0 {
+				reason += "; claims get verbs *"
+			}
+			warnings[at] = append(warnings[at], exportWarning{about: "v1alpha1 of " + e.Name, reason: reason})
+		}
+		// A hash written out matches one identity; one kcp generates differs per installation.
+		var servers []string
+		literal := map[string][]string{}
+		for _, c := range e.Claims {
+			if !c.LiteralHash {
+				continue
+			}
+			for _, server := range serving[resourceName(Resource{Group: c.Group, Name: c.Resource})] {
+				if server == e.Name || exportsNamed(server, m.Exports)[0].IdentitySecret {
+					continue
+				}
+				if len(literal[server]) == 0 {
+					servers = append(servers, server)
+				}
+				literal[server] = append(literal[server], c.Resource)
+			}
+		}
+		for _, server := range servers {
+			warnings[at] = append(warnings[at], exportWarning{about: "literal hashes of " + e.Name + " for " + server,
+				reason: fmt.Sprintf("identityHash for %s is a literal; %s's identity differs per installation", strings.Join(literal[server], ", "), server)})
+		}
 	}
-	return diags
+	return warnings
 }
 
 // notices points out what is worth a look about how the APIs are cut and where their claims reach.
 // Each is a fact about the manifests; whether it is wrong is the designer's call.
-func notices(m Model) []notice {
+func notices(m Model) []finding {
 	// Copies of an export share its name and count once, from the first.
 	var exports []Export
 	for _, e := range m.Exports {
@@ -43,21 +104,21 @@ func notices(m Model) []notice {
 	return append(cohesionNotices(m, exports), reachNotices(m, exports)...)
 }
 
-// notice is a Notice and what it is about, by which a diff tells notices apart: a notice about the
-// same thing may read differently in another tree.
-type notice struct {
+// finding is a warning or a notice and what it is about, by which a diff tells findings apart: a
+// finding about the same thing may read differently in another tree.
+type finding struct {
 	about string
 	Diagnostic
 }
 
-func noticeAbout(about, path string, doc int, format string, args ...any) notice {
-	return notice{about: about, Diagnostic: Diagnostic{Level: Notice, Path: path, Doc: doc, Reason: fmt.Sprintf(format, args...)}}
+func noticeAbout(about, path string, doc int, format string, args ...any) finding {
+	return finding{about: about, Diagnostic: Diagnostic{Level: Notice, Path: path, Doc: doc, Reason: fmt.Sprintf(format, args...)}}
 }
 
 // cohesionNotices points out an export serving several API groups, a group split across exports, a
 // WorkspaceType that binds nothing of the tree, and an export nothing binds.
-func cohesionNotices(m Model, exports []Export) []notice {
-	var diags []notice
+func cohesionNotices(m Model, exports []Export) []finding {
+	var diags []finding
 	note := func(about, path string, doc int, format string, args ...any) {
 		diags = append(diags, noticeAbout(about, path, doc, format, args...))
 	}

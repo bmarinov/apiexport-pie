@@ -9,8 +9,8 @@ import (
 // reachNotices points out where claims reach: two exports bound together that claim the same
 // resources, an export that may write kcp's own resources, a claim on what another export serves, and
 // one that writes out the identity hash of an export whose identity kcp generates.
-func reachNotices(m Model, exports []Export) []notice {
-	var diags []notice
+func reachNotices(m Model, exports []Export) []finding {
+	var diags []finding
 	note := func(about, path string, doc int, format string, args ...any) {
 		diags = append(diags, noticeAbout(about, path, doc, format, args...))
 	}
@@ -77,7 +77,7 @@ func reachNotices(m Model, exports []Export) []notice {
 	serving := exportsServing(exports)
 	for _, e := range exports {
 		var servers []string
-		claimed, literal := map[string][]string{}, map[string][]string{}
+		claimed := map[string][]string{}
 		for _, c := range e.Claims {
 			for _, server := range serving[resourceName(Resource{Group: c.Group, Name: c.Resource})] {
 				if server == e.Name {
@@ -87,9 +87,6 @@ func reachNotices(m Model, exports []Export) []notice {
 					servers = append(servers, server)
 				}
 				claimed[server] = append(claimed[server], c.Resource)
-				if c.LiteralHash {
-					literal[server] = append(literal[server], c.Resource)
-				}
 			}
 		}
 		for _, server := range servers {
@@ -111,11 +108,6 @@ func reachNotices(m Model, exports []Export) []notice {
 				reason += fmt.Sprintf("; %s both", binds(with))
 			}
 			note("claims of "+e.Name+" from "+server, e.Path, e.Doc, "%s", reason)
-			// A hash written out matches one identity; a generated one differs per installation.
-			if len(literal[server]) > 0 && !exportsNamed(server, exports)[0].IdentitySecret {
-				note("literal hashes of "+e.Name+" for "+server, e.Path, e.Doc, "APIExport %s claims %s with a literal identity hash, but %s names no identity secret, so kcp generates a new identity for it in every installation",
-					e.Name, strings.Join(literal[server], ", "), server)
-			}
 		}
 	}
 	return diags

@@ -58,33 +58,73 @@ func workspaceOf(ref ExportRef) string {
 	return ref.Path
 }
 
-// bindingsOf lists what every workspace of type t binds, as kcp's initializer does: the type's own
-// default bindings, then those of each type it extends, transitively, each binding once. Bases not
-// in the tree add nothing, and a cycle stops where it started.
-func bindingsOf(t WorkspaceType, types []WorkspaceType) []binding {
-	var bound []binding
-	listed := map[ExportRef]bool{}
+// extendChain lists type t and the types it extends, transitively, each once, as kcp resolves them
+// for a workspace of type t: depth first, in the order they are extended. Bases not in the tree are
+// left out, and a cycle stops where it started.
+func extendChain(t WorkspaceType, types []WorkspaceType) []WorkspaceType {
+	var chain []WorkspaceType
 	visited := map[string]bool{}
-	var visit func(t WorkspaceType, via string, r relation)
-	visit = func(t WorkspaceType, via string, r relation) {
+	var visit func(t WorkspaceType)
+	visit = func(t WorkspaceType) {
 		if visited[t.Name] {
 			return
 		}
 		visited[t.Name] = true
-		for _, ref := range t.Binds {
+		chain = append(chain, t)
+		for _, base := range t.Extends {
+			if bt, ok := typeNamed(base.Name, types); ok {
+				visit(bt)
+			}
+		}
+	}
+	visit(t)
+	return chain
+}
+
+// bindingsOf lists what every workspace of type t binds, as kcp's initializer does: the type's own
+// default bindings, then those of each type it extends, transitively, each binding once.
+func bindingsOf(t WorkspaceType, types []WorkspaceType) []binding {
+	var bound []binding
+	listed := map[ExportRef]bool{}
+	for i, ct := range extendChain(t, types) {
+		via, r := ct.Name, bindsThroughExtend
+		if i == 0 {
+			via, r = "", bindsByDefault
+		}
+		for _, ref := range ct.Binds {
 			if !listed[ref] {
 				listed[ref] = true
 				bound = append(bound, binding{ref: ref, via: via, relation: r})
 			}
 		}
-		for _, base := range t.Extends {
-			if bt, ok := typeNamed(base.Name, types); ok {
-				visit(bt, bt.Name, bindsThroughExtend)
-			}
+	}
+	return bound
+}
+
+// lifecycleOf says which types initialize and terminate the workspaces of type t: those of its
+// extend chain that set initializer or terminator, its own included (kcp v0.32.3). Bases not in the
+// tree are unknown, so they say nothing.
+func lifecycleOf(t WorkspaceType, types []WorkspaceType) []string {
+	var initializers, terminators []string
+	for _, ct := range extendChain(t, types) {
+		if ct.Initializer {
+			initializers = append(initializers, ct.Name)
+		}
+		if ct.Terminator {
+			terminators = append(terminators, ct.Name)
 		}
 	}
-	visit(t, "", bindsByDefault)
-	return bound
+	if len(initializers) > 0 && slices.Equal(initializers, terminators) {
+		return []string{"initialized and terminated by " + strings.Join(initializers, ", ")}
+	}
+	var lines []string
+	if len(initializers) > 0 {
+		lines = append(lines, "initialized by "+strings.Join(initializers, ", "))
+	}
+	if len(terminators) > 0 {
+		lines = append(lines, "terminated by "+strings.Join(terminators, ", "))
+	}
+	return lines
 }
 
 // consumer is a set of workspaces that bind the same exports: those of one WorkspaceType, or those of

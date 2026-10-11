@@ -28,6 +28,7 @@ const overviewClasses = `classes: {
   kind: {style: {fill: "#ffffff"; stroke: "#adb5bd"; font-size: 14; border-radius: 4}}
   export: {style: {fill: "#ffffff"; stroke: "#364fc7"; stroke-width: 2; font-size: 16; bold: true; border-radius: 6}}
   story: {style: {fill: transparent; stroke: transparent; font-size: 13; bold: false; font-color: "#343a40"}}
+  warning: {style: {fill: transparent; stroke: transparent; font-size: 13; bold: true; font-color: "#e8590c"}}
   workspace: {style: {fill: "#f8f9fa"; stroke: "#868e96"; font-size: 15; border-radius: 8}}
   outside: {style: {fill: transparent; stroke: "#868e96"; stroke-dash: 3; font-size: 14}}
   outside-export: {style: {fill: "#f8f9fa"; stroke: "#868e96"; stroke-dash: 3; font-size: 14; border-radius: 6}}
@@ -40,6 +41,15 @@ const overviewClasses = `classes: {
 
 // apiGroupSample is the legend's sample of a box in RESOURCES: an API group holding a kind.
 const apiGroupSample = "  \"api-group\": {\n    label: \"API group\"\n    class: group\n    \"kind\": \"kind\" {class: kind}\n  }\n"
+
+// warningSample is the legend's sample of an export box with a warning.
+const warningSample = "  \"warning\": {\n    label: \"APIExport\"\n    class: export\n    grid-columns: 1\n    grid-gap: 0\n" +
+	"    \"warnings\": \"! a warning, also printed on stderr\" {class: warning; height: 17}\n  }\n"
+
+// lineHeight is the height d2 0.6.9 gives a line of the 13 px text in an export box, with room
+// to breathe. A grid cell as tall as its lines keeps d2 from spreading a box's cells over its
+// height, which put the warnings at the bottom, far from the story.
+const lineHeight = 17
 
 // kindGroup is the box of an API group in RESOURCES.
 type kindGroup struct {
@@ -115,15 +125,18 @@ type exportBox struct {
 	bound []consumerRef
 	kept  []string
 	needs []string
-	in    presence
+	open  []string
+	// warnings say what is wrong with the export as written, a line each, in orange under the story.
+	warnings []string
+	in       presence
 }
 
 // consumerRef is a consumer binding an export, by its id in CONSUMERS and its short name. note, in a
 // diff, says what kcp makes of a change of the binding in the workspaces the consumer already has.
 type consumerRef struct{ id, name, note string }
 
-// story is what the box says under the name: where the export is bound and what it needs of other
-// exports, so the box reads without tracing arrows.
+// story is what the box says under the name: where the export is bound, what it needs of other
+// exports, so the box reads without tracing arrows, and what it leaves open.
 func (e exportBox) story() []string {
 	var story []string
 	if len(e.bound) > 0 {
@@ -139,7 +152,8 @@ func (e exportBox) story() []string {
 	if len(e.kept) > 0 {
 		story = append(story, "existing workspaces keep "+strings.Join(e.kept, ", "))
 	}
-	return append(story, e.needs...)
+	story = append(story, e.needs...)
+	return append(story, e.open...)
 }
 
 // outsideBox is an export bound from outside the tree, named with the workspace it is bound from.
@@ -268,13 +282,14 @@ func overviewOf(m Model, byName bool) overview {
 		}
 	}
 	exportsCalled := countNames(m.Exports, func(e Export) string { return e.Name })
-	serving := exportsServing(m.Exports)
+	serving, warnings := exportsServing(m.Exports), exportWarnings(m)
 	for _, e := range m.Exports {
 		label := e.Name
 		if exportsCalled[e.Name] > 1 && !byName {
 			label += " · " + location(e.Path, e.Doc)
 		}
-		o.exports = append(o.exports, exportBox{keys: exportKeys(e), label: label, bound: boundBy[e.Name], needs: needsOf(e, serving)})
+		o.exports = append(o.exports, exportBox{keys: exportKeys(e), label: label, bound: boundBy[e.Name], needs: needsOf(e, serving), open: openOf(e),
+			warnings: warningLines(warnings[location(e.Path, e.Doc)])})
 	}
 	return o
 }
@@ -316,15 +331,16 @@ func (o overview) d2() []byte {
 			fmt.Fprintf(&b, "  %q: %q {class: workspace}\n", workspaceID(ws), "Workspace "+ws)
 		}
 		for _, e := range o.exports {
-			story := e.story()
-			if len(story) == 0 {
-				fmt.Fprintf(&b, "  %s: %q {class: export%s}\n", d2Path(e.keys...), e.label, e.in.look())
-				continue
-			}
+			// Every box has a story, as it says whether the export sets a maximal permission policy.
 			// As a grid the box is laid out as one node; as a plain container dagre stretches it
 			// across the ranks of its edges.
-			fmt.Fprintf(&b, "  %s: {\n    label: %q\n    class: export\n%s    grid-columns: 1\n    \"story\": %q {class: story}\n  }\n",
-				d2Path(e.keys...), e.label, e.in.lines("    "), strings.Join(story, "\n"))
+			fmt.Fprintf(&b, "  %s: {\n    label: %q\n    class: export\n%s    grid-columns: 1\n    grid-gap: 0\n",
+				d2Path(e.keys...), e.label, e.in.lines("    "))
+			writeCell(&b, "story", "story", e.story())
+			if len(e.warnings) > 0 {
+				writeCell(&b, "warnings", "warning", e.warnings)
+			}
+			b.WriteString("  }\n")
 		}
 		if len(o.outside) > 0 {
 			fmt.Fprintf(&b, "  %q: {\n    label: \"outside the tree\"\n    class: outside\n", outsideID)
@@ -366,6 +382,9 @@ func (o overview) d2() []byte {
 	samples := ""
 	if len(o.areas) > 0 {
 		samples = apiGroupSample
+	}
+	if slices.ContainsFunc(o.exports, func(e exportBox) bool { return len(e.warnings) > 0 }) {
+		samples += warningSample
 	}
 	for _, p := range []presence{onlyInB, onlyInA} {
 		if o.draws(p) {
@@ -515,6 +534,29 @@ func needsOf(e Export, serving map[string][]string) []string {
 		lines = append(lines, fmt.Sprintf("%s %s from %s", needWords[n.r], strings.Join(claimed[n], ", "), n.server))
 	}
 	return lines
+}
+
+// openOf says what an export leaves open: whether a maximal permission policy caps what consumers
+// may do with what it serves.
+func openOf(e Export) []string {
+	if e.MaximalPermissionPolicy == "" {
+		return []string{"☐ maximal permission policy"}
+	}
+	return []string{"☑ maximal permission policy · " + e.MaximalPermissionPolicy}
+}
+
+// warningLines are what is wrong with an export as written, as its box says it.
+func warningLines(warnings []exportWarning) []string {
+	var lines []string
+	for _, w := range warnings {
+		lines = append(lines, "! "+w.reason)
+	}
+	return lines
+}
+
+// writeCell writes lines as a cell of an export box's grid, as tall as the lines.
+func writeCell(b *bytes.Buffer, key, class string, lines []string) {
+	fmt.Fprintf(b, "    %q: %q {class: %s; height: %d}\n", key, strings.Join(lines, "\n"), class, lineHeight*len(lines))
 }
 
 // needWords say what a claim lets the provider do, by the relation its arrow is drawn in.

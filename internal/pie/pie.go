@@ -24,6 +24,11 @@ type Export struct {
 	// IdentitySecret says the export names the secret its identity comes from. Without one kcp
 	// generates the identity, a new one in every installation, and with it the hash claims name.
 	IdentitySecret bool
+	// MaximalPermissionPolicy is the kind of policy that caps what consumers may do with the
+	// export's resources, "local" (the only kind in kcp v0.32), or empty when there is none.
+	MaximalPermissionPolicy string
+	// V1alpha1 says the export is written as apis.kcp.io/v1alpha1, which kcp deprecates.
+	V1alpha1 bool
 }
 
 // Claim is a permission claim: the export's provider asks every consumer for access to Resource
@@ -77,7 +82,8 @@ type Schema struct {
 type Level int
 
 const (
-	// Warning means an APIExport or APIResourceSchema is missing from the diagram.
+	// Warning means something in the manifests to fix: a document the diagram cannot draw, bindings
+	// kcp refuses, an APIExport in a version kcp deprecates.
 	Warning Level = iota + 1
 	// Skipped means a document is not drawn because it is of no interest.
 	Skipped
@@ -119,6 +125,9 @@ type WorkspaceType struct {
 	// Maintains says kcp keeps the default bindings in the type's existing workspaces too
 	// (defaultAPIBindingLifecycle Maintain); unset, it creates them only with a new workspace.
 	Maintains bool
+	// Initializer and Terminator say kcp holds the workspaces of this type, and of every type
+	// extending it, for an initializing and a terminating controller of the type.
+	Initializer, Terminator bool
 }
 
 // ExportRef names an APIExport and the workspace path it lives in. An empty Path is the workspace

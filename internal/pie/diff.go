@@ -55,7 +55,7 @@ func RenderDiff(a, b Model) []byte {
 	}
 	diffClaims(&out, a, b)
 	diffConsumers(&out, a, b)
-	diffNotices(&out, a, b)
+	diffFindings(&out, a, b)
 	return out.Bytes()
 }
 
@@ -225,13 +225,14 @@ func diffConsumers(out *bytes.Buffer, a, b Model) {
 	}
 }
 
-// diffNotices lists the notices only a has as removed, then in b's order those a has in other words
-// as changed and those a has not as added. A notice is a fact, not a fault, so none is resolved. Notices are told apart by what they are about; of copies of
-// a WorkspaceType, each with its notice, the first counts.
-func diffNotices(out *bytes.Buffer, a, b Model) {
-	about := func(n notice) func(notice) bool { return func(x notice) bool { return x.about == n.about } }
-	firsts := func(all []notice) []notice {
-		var ns []notice
+// diffFindings lists the warnings and notices only a has as removed, then in b's order those a has in
+// other words as changed and those a has not as added, by their level. Findings are told apart by
+// what they are about; of copies of an export or a WorkspaceType, each with its finding, the first
+// counts.
+func diffFindings(out *bytes.Buffer, a, b Model) {
+	about := func(n finding) func(finding) bool { return func(x finding) bool { return x.about == n.about } }
+	firsts := func(all []finding) []finding {
+		var ns []finding
 		for _, n := range all {
 			if !slices.ContainsFunc(ns, about(n)) {
 				ns = append(ns, n)
@@ -239,20 +240,20 @@ func diffNotices(out *bytes.Buffer, a, b Model) {
 		}
 		return ns
 	}
-	before, after := firsts(notices(a)), firsts(notices(b))
+	before, after := firsts(findings(a)), firsts(findings(b))
 	for _, n := range before {
 		if !slices.ContainsFunc(after, about(n)) {
-			fmt.Fprintf(out, "removed: notice: %s\n", n.Reason)
+			fmt.Fprintf(out, "removed: %s: %s\n", n.Level, n.Reason)
 		}
 	}
 	for _, n := range after {
 		i := slices.IndexFunc(before, about(n))
 		if i < 0 {
-			fmt.Fprintf(out, "added: notice: %s\n", n.Reason)
+			fmt.Fprintf(out, "added: %s: %s\n", n.Level, n.Reason)
 			continue
 		}
 		if before[i].Reason != n.Reason {
-			fmt.Fprintf(out, "changed: notice: %s\n", n.Reason)
+			fmt.Fprintf(out, "changed: %s: %s\n", n.Level, n.Reason)
 		}
 	}
 }

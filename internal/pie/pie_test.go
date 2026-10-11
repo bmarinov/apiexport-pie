@@ -92,20 +92,20 @@ func TestScan(t *testing.T) {
 			},
 		},
 		{
-			name: "draws a v1alpha1 APIExport the same as its v1alpha2 equivalent",
+			name: "draws a v1alpha1 APIExport the same as its v1alpha2 equivalent, and records that it is v1alpha1",
 			fsys: fstest.MapFS{
 				"export.yaml": manifest(t, apiExportV1alpha1("core.example.io", "v1.widgets.core.example.io", "v1.gadgets.core.example.io")),
 			},
-			want: pie.Model{Exports: []pie.Export{withClaims(coreExportAt("export.yaml"), pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}})}},
+			want: pie.Model{Exports: []pie.Export{withV1alpha1(withClaims(coreExportAt("export.yaml"), pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}}))}},
 		},
 		{
 			name: "puts a v1alpha1 schema of the core group in the empty group, as kcp does",
 			fsys: fstest.MapFS{
 				"export.yaml": manifest(t, apiExportV1alpha1("legacy.example.io", "v1.configmaps.core")),
 			},
-			want: pie.Model{Exports: []pie.Export{withClaims(pie.Export{Path: "export.yaml", Doc: 1, Name: "legacy.example.io", Resources: []pie.Resource{
+			want: pie.Model{Exports: []pie.Export{withV1alpha1(withClaims(pie.Export{Path: "export.yaml", Doc: 1, Name: "legacy.example.io", Resources: []pie.Resource{
 				{Group: "", Name: "configmaps", Schema: "v1.configmaps.core"},
-			}}, pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}})}},
+			}}, pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}}))}},
 		},
 		{
 			name: "records what an export claims, which claims a default selector narrows, which name an export's identity, and which write its hash out",
@@ -136,7 +136,20 @@ func TestScan(t *testing.T) {
 			want: pie.Model{Exports: []pie.Export{
 				{Path: "a.yaml", Doc: 1, Name: "a.example.io", IdentitySecret: true},
 				{Path: "b.yaml", Doc: 1, Name: "b.example.io"},
-				{Path: "c.yaml", Doc: 1, Name: "c.example.io", IdentitySecret: true},
+				{Path: "c.yaml", Doc: 1, Name: "c.example.io", IdentitySecret: true, V1alpha1: true},
+			}},
+		},
+		{
+			name: "records the maximal permission policy an export sets, in either version; kcp knows one kind, local, and accepts no policy without it",
+			fsys: fstest.MapFS{
+				"a.yaml": {Data: []byte("apiVersion: apis.kcp.io/v1alpha2\nkind: APIExport\nmetadata:\n  name: a.example.io\nspec:\n  maximalPermissionPolicy:\n    local: {}\n")},
+				"b.yaml": {Data: []byte("apiVersion: apis.kcp.io/v1alpha2\nkind: APIExport\nmetadata:\n  name: b.example.io\nspec:\n  maximalPermissionPolicy: {}\n")},
+				"c.yaml": {Data: []byte("apiVersion: apis.kcp.io/v1alpha1\nkind: APIExport\nmetadata:\n  name: c.example.io\nspec:\n  maximalPermissionPolicy:\n    local: {}\n")},
+			},
+			want: pie.Model{Exports: []pie.Export{
+				{Path: "a.yaml", Doc: 1, Name: "a.example.io", MaximalPermissionPolicy: "local"},
+				{Path: "b.yaml", Doc: 1, Name: "b.example.io"},
+				{Path: "c.yaml", Doc: 1, Name: "c.example.io", MaximalPermissionPolicy: "local", V1alpha1: true},
 			}},
 		},
 		{
@@ -199,6 +212,31 @@ func TestScan(t *testing.T) {
 				{Path: "init.yaml", Doc: 1, Name: "init"},
 				{Path: "maintain.yaml", Doc: 1, Name: "maintain", Maintains: true},
 				{Path: "unset.yaml", Doc: 1, Name: "unset"},
+			}},
+		},
+		{
+			name: "records whether a WorkspaceType initializes and terminates its workspaces",
+			fsys: fstest.MapFS{
+				"both.yaml": manifest(t, func() *tenancyv1alpha1.WorkspaceType {
+					wt := workspaceType("both", nil, nil)
+					wt.Spec.Initializer, wt.Spec.Terminator = true, true
+					return wt
+				}()),
+				"init.yaml": manifest(t, func() *tenancyv1alpha1.WorkspaceType {
+					wt := workspaceType("init", nil, nil)
+					wt.Spec.Initializer = true
+					return wt
+				}()),
+				"term.yaml": manifest(t, func() *tenancyv1alpha1.WorkspaceType {
+					wt := workspaceType("term", nil, nil)
+					wt.Spec.Terminator = true
+					return wt
+				}()),
+			},
+			want: pie.Model{WorkspaceTypes: []pie.WorkspaceType{
+				{Path: "both.yaml", Doc: 1, Name: "both", Initializer: true, Terminator: true},
+				{Path: "init.yaml", Doc: 1, Name: "init", Initializer: true},
+				{Path: "term.yaml", Doc: 1, Name: "term", Terminator: true},
 			}},
 		},
 		{
@@ -1682,6 +1720,93 @@ func TestCheckWarnsAboutBindingsKcpRefuses(t *testing.T) {
 	}
 }
 
+func TestCheckWarnsAboutAPIExportsAsWritten(t *testing.T) {
+	widgetsOfAll := pie.Claim{Group: "core.example.io", Resource: "widgets", Verbs: []string{"*"}}
+	core := pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource(), gadgetResource()}}
+	ui := pie.Export{Path: "pms/ui.yaml", Doc: 1, Name: "ui.example.io", Resources: []pie.Resource{{Group: "ui.example.io", Name: "panels"}}}
+	literal := func(group, resource string) pie.Claim {
+		return pie.Claim{Group: group, Resource: resource, Verbs: []string{"get"}, FromExport: true, LiteralHash: true}
+	}
+	terminal := func(claims ...pie.Claim) pie.Export {
+		return pie.Export{Path: "pms/terminal.yaml", Doc: 1, Name: "terminal.example.io", Claims: claims}
+	}
+	tests := []struct {
+		name  string
+		model pie.Model
+		want  []string
+	}{
+		{
+			name: "an APIExport written as v1alpha1 is a warning, as kcp deprecates the version, and says its claims get all verbs",
+			model: pie.Model{Exports: []pie.Export{
+				withV1alpha1(withClaims(pie.Export{Path: "ws/system.yaml", Doc: 1, Name: "system.example.io"}, widgetsOfAll)),
+				withV1alpha1(pie.Export{Path: "ws/old.yaml", Doc: 2, Name: "old.example.io"}),
+				coreExportAt("ws/core.yaml"),
+			}},
+			want: []string{
+				"warning: ws/system.yaml#1: APIExport system.example.io: apis.kcp.io/v1alpha1 is deprecated; claims get verbs *",
+				"warning: ws/old.yaml#2: APIExport old.example.io: apis.kcp.io/v1alpha1 is deprecated",
+			},
+		},
+		{
+			name: "each copy is warned about where it is written, before the bindings kcp refuses",
+			model: pie.Model{
+				Exports: []pie.Export{
+					withV1alpha1(pie.Export{Path: "a/old.yaml", Doc: 1, Name: "old.example.io", Resources: []pie.Resource{widgetResource()}}),
+					withV1alpha1(pie.Export{Path: "b/old.yaml", Doc: 1, Name: "old.example.io", Resources: []pie.Resource{widgetResource()}}),
+					pie.Export{Path: "a/new.yaml", Doc: 1, Name: "new.example.io", Resources: []pie.Resource{widgetResource()}},
+				},
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account",
+					Binds: []pie.ExportRef{{Path: "root:pms", Name: "old.example.io"}, {Path: "root:pms", Name: "new.example.io"}}}},
+			},
+			want: []string{
+				"warning: a/old.yaml#1: APIExport old.example.io: apis.kcp.io/v1alpha1 is deprecated",
+				"warning: b/old.yaml#1: APIExport old.example.io: apis.kcp.io/v1alpha1 is deprecated",
+				"warning: types/account.yaml#1: WorkspaceType account binds old.example.io and new.example.io, which both serve widgets.core.example.io; kcp binds only one of them",
+			},
+		},
+		{
+			name: "a claim that writes out the identity hash of an export whose identity kcp generates is a warning: the hash matches one installation at most",
+			model: pie.Model{Exports: []pie.Export{core,
+				terminal(literal("core.example.io", "widgets"), pie.Claim{Group: "core.example.io", Resource: "gadgets", Verbs: []string{"get"}, FromExport: true}, literal("core.example.io", "gadgets")),
+			}},
+			want: []string{"warning: pms/terminal.yaml#1: APIExport terminal.example.io: identityHash for widgets, gadgets is a literal; core.example.io's identity differs per installation"},
+		},
+		{
+			name: "an export that names its identity secret has the same identity everywhere, and a literal hash of what the export serves itself is kcp's to ignore",
+			model: pie.Model{Exports: []pie.Export{
+				{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource()}, IdentitySecret: true, Claims: []pie.Claim{literal("ui.example.io", "panels")}},
+				withClaims(ui, literal("ui.example.io", "panels")),
+				terminal(literal("core.example.io", "widgets")),
+			}},
+			want: []string{"warning: pms/core.yaml#1: APIExport core.example.io: identityHash for panels is a literal; ui.example.io's identity differs per installation"},
+		},
+		{
+			name: "an export's warnings stand together, the version first, then a line per export it writes out a hash of",
+			model: pie.Model{Exports: []pie.Export{core, ui,
+				withV1alpha1(terminal(literal("ui.example.io", "panels"), literal("core.example.io", "widgets"))),
+			}},
+			want: []string{
+				"warning: pms/terminal.yaml#1: APIExport terminal.example.io: apis.kcp.io/v1alpha1 is deprecated; claims get verbs *",
+				"warning: pms/terminal.yaml#1: APIExport terminal.example.io: identityHash for panels is a literal; ui.example.io's identity differs per installation",
+				"warning: pms/terminal.yaml#1: APIExport terminal.example.io: identityHash for widgets is a literal; core.example.io's identity differs per installation",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			for _, d := range pie.Check(tt.model) {
+				if d.Level == pie.Warning {
+					got = append(got, d.String())
+				}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("Check() =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
+			}
+		})
+	}
+}
+
 func TestCheckPointsOutWhatIsWorthALook(t *testing.T) {
 	panels := pie.Resource{Group: "ui.example.io", Name: "panels", Schema: "v1.panels.ui.example.io"}
 	core := pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource()}}
@@ -1894,7 +2019,7 @@ func TestCheckPointsOutWhereClaimsReach(t *testing.T) {
 			want: []string{"notice: pms/terminal.example.io.yaml#1: APIExport terminal.example.io claims widgets from core.example.io"},
 		},
 		{
-			name: "a claim that writes out the identity hash of an export whose identity kcp generates matches one installation at most",
+			name: "a claim that writes out the identity hash of an export whose identity kcp generates is a warning, not a notice",
 			model: pie.Model{Exports: []pie.Export{
 				core,
 				export("terminal.example.io", nil,
@@ -1903,8 +2028,8 @@ func TestCheckPointsOutWhereClaimsReach(t *testing.T) {
 				),
 			}},
 			want: []string{
+				"warning: pms/terminal.example.io.yaml#1: APIExport terminal.example.io: identityHash for widgets is a literal; core.example.io's identity differs per installation",
 				"notice: pms/terminal.example.io.yaml#1: APIExport terminal.example.io claims widgets, gadgets from core.example.io",
-				"notice: pms/terminal.example.io.yaml#1: APIExport terminal.example.io claims widgets with a literal identity hash, but core.example.io names no identity secret, so kcp generates a new identity for it in every installation",
 			},
 		},
 		{
@@ -1926,6 +2051,32 @@ func TestCheckPointsOutWhereClaimsReach(t *testing.T) {
 				t.Errorf("Check() =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
 			}
 		})
+	}
+}
+
+func TestRenderSurfaceListsWarningsOverWhatIsWorthALook(t *testing.T) {
+	model := pie.Model{
+		Exports: []pie.Export{withV1alpha1(pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource()}})},
+		Schemas: []pie.Schema{widgetSchemaAt("pms/widgets.yaml")},
+		WorkspaceTypes: []pie.WorkspaceType{
+			{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}},
+			{Path: "types/security.yaml", Doc: 1, Name: "security"},
+		},
+	}
+	want := `| APIExport | kind | account | security |
+|---|---|:-:|:-:|
+| **core.example.io** | Widget | ● |  |
+
+**Warnings**
+
+- APIExport core.example.io: apis.kcp.io/v1alpha1 is deprecated
+
+**Worth a look**
+
+- WorkspaceType security binds no APIExport
+`
+	if got := string(pie.RenderSurface(model)); got != want {
+		t.Errorf("RenderSurface() =\n%s\nwant\n%s", got, want)
 	}
 }
 
@@ -2687,7 +2838,7 @@ added: notice: API group core.example.io is served by 2 APIExports: core.example
 	}
 }
 
-func TestRenderDiffListsNotices(t *testing.T) {
+func TestRenderDiffListsWarningsAndNotices(t *testing.T) {
 	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")}
 	panels := pie.Resource{Group: "ui.example.io", Name: "panels"}
 	bolts := pie.Resource{Group: "billing.example.io", Name: "bolts"}
@@ -2798,8 +2949,8 @@ changed: notice: APIExport a.example.io may write kcp's own resources where acco
 			b: pie.Model{Schemas: schemas, Exports: []pie.Export{core,
 				export("terminal.example.io", nil, claim("core.example.io", "widgets"), literal(claim("core.example.io", "gadgets")))}},
 			want: `added: claim by terminal.example.io on gadgets.core.example.io: get
+added: warning: APIExport terminal.example.io: identityHash for gadgets is a literal; core.example.io's identity differs per installation
 changed: notice: APIExport terminal.example.io claims widgets, gadgets from core.example.io
-added: notice: APIExport terminal.example.io claims gadgets with a literal identity hash, but core.example.io names no identity secret, so kcp generates a new identity for it in every installation
 `,
 		},
 		{
@@ -2877,8 +3028,40 @@ added: notice: APIExport b.example.io may write kcp's own resources where accoun
 				export("terminal.example.io", nil, literal(claim("core.example.io", "widgets")), literal(claim("ui.example.io", "panels"))),
 			}},
 			want: `added: claim by terminal.example.io on panels.ui.example.io: get
+added: warning: APIExport terminal.example.io: identityHash for panels is a literal; ui.example.io's identity differs per installation
 added: notice: APIExport terminal.example.io claims panels from ui.example.io
-added: notice: APIExport terminal.example.io claims panels with a literal identity hash, but ui.example.io names no identity secret, so kcp generates a new identity for it in every installation
+`,
+		},
+		{
+			name: "a warning only A has is removed, and one that reads differently in B is changed",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{withV1alpha1(core),
+				withV1alpha1(export("terminal.example.io", nil))}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{core,
+				withV1alpha1(export("terminal.example.io", nil, pie.Claim{Resource: "secrets", Verbs: []string{"get"}}))}},
+			want: `added: claim by terminal.example.io on secrets: get
+removed: warning: APIExport core.example.io: apis.kcp.io/v1alpha1 is deprecated
+changed: warning: APIExport terminal.example.io: apis.kcp.io/v1alpha1 is deprecated; claims get verbs *
+`,
+		},
+		{
+			name: "bindings kcp refuses only in B are an added warning",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{core, export("other.example.io", []pie.Resource{widgetResource()})},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io"), typeBinding("org", "other.example.io")}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{core, export("other.example.io", []pie.Resource{widgetResource()})},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io", "other.example.io"), typeBinding("org", "other.example.io")}},
+			want: `added: binding of other.example.io by WorkspaceType account, for new workspaces only
+added: warning: WorkspaceType account binds core.example.io and other.example.io, which both serve widgets.core.example.io; kcp binds only one of them
+`,
+		},
+		{
+			name: "each refusal counts on its own",
+			a: pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", []pie.Resource{widgetResource(), gadgetResource()}), export("other.example.io", []pie.Resource{widgetResource(), gadgetResource()})},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io"), typeBinding("org", "other.example.io")}},
+			b: pie.Model{Schemas: schemas, Exports: []pie.Export{export("core.example.io", []pie.Resource{widgetResource(), gadgetResource()}), export("other.example.io", []pie.Resource{widgetResource(), gadgetResource()})},
+				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "core.example.io", "other.example.io"), typeBinding("org", "other.example.io")}},
+			want: `added: binding of other.example.io by WorkspaceType account, for new workspaces only
+added: warning: WorkspaceType account binds core.example.io and other.example.io, which both serve widgets.core.example.io; kcp binds only one of them
+added: warning: WorkspaceType account binds core.example.io and other.example.io, which both serve gadgets.core.example.io; kcp binds only one of them
 `,
 		},
 	}
@@ -3012,7 +3195,7 @@ func TestRenderOverviewDiffD2SaysWhatWorkspacesATypeAlreadyHasGet(t *testing.T) 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := string(pie.RenderOverviewDiffD2(tt.a, tt.b))
-			if want := fmt.Sprintf("\"story\": %q {class: story}", tt.want); !strings.Contains(got, want) {
+			if want := fmt.Sprintf("\"story\": %q {class: story;", tt.want+"\n☐ maximal permission policy"); !strings.Contains(got, want) {
 				t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, want)
 			}
 		})
@@ -3073,7 +3256,7 @@ func TestRenderOverviewDiffD2SaysWhatAnExportKeepsServingToItsBindings(t *testin
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := string(pie.RenderOverviewDiffD2(tt.a, tt.b))
-			if want := fmt.Sprintf("\"story\": %q {class: story}", tt.want); !strings.Contains(got, want) {
+			if want := fmt.Sprintf("\"story\": %q {class: story;", tt.want+"\n☐ maximal permission policy"); !strings.Contains(got, want) {
 				t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, want)
 			}
 		})
@@ -3396,6 +3579,11 @@ func apiExport(name string, resources ...apisv1alpha2.ResourceSchema) *apisv1alp
 	}
 }
 
+func withV1alpha1(e pie.Export) pie.Export {
+	e.V1alpha1 = true
+	return e
+}
+
 func apiExportV1alpha1(name string, schemas ...string) *apisv1alpha1.APIExport {
 	return &apisv1alpha1.APIExport{
 		TypeMeta:   metav1.TypeMeta{APIVersion: apisv1alpha1.SchemeGroupVersion.String(), Kind: "APIExport"},
@@ -3511,6 +3699,7 @@ classes: {
   kind: {style: {fill: "#ffffff"; stroke: "#adb5bd"; font-size: 14; border-radius: 4}}
   export: {style: {fill: "#ffffff"; stroke: "#364fc7"; stroke-width: 2; font-size: 16; bold: true; border-radius: 6}}
   story: {style: {fill: transparent; stroke: transparent; font-size: 13; bold: false; font-color: "#343a40"}}
+  warning: {style: {fill: transparent; stroke: transparent; font-size: 13; bold: true; font-color: "#e8590c"}}
   workspace: {style: {fill: "#f8f9fa"; stroke: "#868e96"; font-size: 15; border-radius: 8}}
   outside: {style: {fill: transparent; stroke: "#868e96"; stroke-dash: 3; font-size: 14}}
   outside-export: {style: {fill: "#f8f9fa"; stroke: "#868e96"; stroke-dash: 3; font-size: 14; border-radius: 6}}
@@ -3572,7 +3761,13 @@ func TestRenderOverviewD2(t *testing.T) {
 			want: `"apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:pms/export.yaml#1": "core.example.io" {class: export}
+  "apiexport:pms/export.yaml#1": {
+    label: "core.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 `,
 		},
@@ -3591,7 +3786,8 @@ func TestRenderOverviewD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -3633,15 +3829,23 @@ func TestRenderOverviewD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
   "apiexport:pms/other.yaml#1": {
     label: "other.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account, org" {class: story}
+    grid-gap: 0
+    "story": "bound at account, org\n☐ maximal permission policy" {class: story; height: 34}
   }
-  "apiexport:pms/lone.yaml#1": "lone.example.io" {class: export}
+  "apiexport:pms/lone.yaml#1": {
+    label: "lone.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 "consumers": {
   label: "CONSUMERS"
@@ -3680,7 +3884,8 @@ func TestRenderOverviewD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account, a/manifests, b/manifests, c/kcp, kcp, tools" {class: story}
+    grid-gap: 0
+    "story": "bound at account, a/manifests, b/manifests, c/kcp, kcp, tools\n☐ maximal permission policy" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -3721,7 +3926,8 @@ func TestRenderOverviewD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account, 01" {class: story}
+    grid-gap: 0
+    "story": "bound at account, 01\n☐ maximal permission policy" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -3767,25 +3973,29 @@ func TestRenderOverviewD2(t *testing.T) {
     label: "a.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:ws/b.yaml#1": {
     label: "b.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:ws/c.yaml#1": {
     label: "c.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:ws/d.yaml#1": {
     label: "d.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -3832,13 +4042,15 @@ func TestRenderOverviewD2(t *testing.T) {
     label: "a.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:ws/b.yaml#1": {
     label: "b.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -3903,13 +4115,15 @@ func TestRenderOverviewD2(t *testing.T) {
     label: "core.example.io · a/export.yaml#1"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:b/export.yaml#1": {
     label: "core.example.io · b/export.yaml#1"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -3966,7 +4180,13 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:ws/core.yaml#1": "core.example.io" {class: export}
+  "apiexport:ws/core.yaml#1": {
+    label: "core.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:ui.example.io"."panels.ui.example.io" {style.stroke: "#868e96"}
@@ -3999,8 +4219,20 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:ws/core.yaml#1": "core.example.io" {class: export}
-  "apiexport:ws/ui.yaml#1": "ui.example.io" {class: export}
+  "apiexport:ws/core.yaml#1": {
+    label: "core.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
+  "apiexport:ws/ui.yaml#1": {
+    label: "ui.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:ui.example.io"."panels.ui.example.io" {style.stroke: "#868e96"}
@@ -4028,7 +4260,13 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:ws/core.yaml#1": "core.example.io" {class: export}
+  "apiexport:ws/core.yaml#1": {
+    label: "core.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 ` + overviewLegend(legendServes, legendAPIGroup),
@@ -4052,8 +4290,20 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:a/export.yaml#1": "core.example.io · a/export.yaml#1" {class: export}
-  "apiexport:b/export.yaml#1": "core.example.io · b/export.yaml#1" {class: export}
+  "apiexport:a/export.yaml#1": {
+    label: "core.example.io · a/export.yaml#1"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
+  "apiexport:b/export.yaml#1": {
+    label: "core.example.io · b/export.yaml#1"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 "apiexports"."apiexport:a/export.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."apiexport:a/export.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}
@@ -4066,6 +4316,170 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := string(pie.RenderOverviewD2(tt.model)); got != overviewHead+tt.want {
 				t.Errorf("RenderOverviewD2() =\n%s\nwant\n%s", got, overviewHead+tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderOverviewD2SaysWhatAnExportLeavesOpen(t *testing.T) {
+	core := coreExportAt("pms/core.yaml")
+	terminal := pie.Export{Path: "pms/terminal.yaml", Doc: 1, Name: "terminal.example.io"}
+	allOfWidgets := pie.Claim{Group: "core.example.io", Resource: "widgets", Verbs: []string{"*"}}
+	withPolicy := func(e pie.Export) pie.Export {
+		e.MaximalPermissionPolicy = "local"
+		return e
+	}
+	tests := []struct {
+		name  string
+		model pie.Model
+		want  string
+	}{
+		{
+			name:  "an export without a maximal permission policy says so, bound or not",
+			model: pie.Model{Exports: []pie.Export{core}},
+			want:  "☐ maximal permission policy",
+		},
+		{
+			name:  "an export with one names its kind",
+			model: pie.Model{Exports: []pie.Export{withPolicy(core)}},
+			want:  "☑ maximal permission policy · local",
+		},
+		{
+			name: "the policy comes after where an export is bound and what it needs",
+			model: pie.Model{
+				Exports: []pie.Export{core, withPolicy(withClaims(terminal, allOfWidgets))},
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account",
+					Binds: []pie.ExportRef{{Path: "root:pms", Name: "terminal.example.io"}}}},
+			},
+			want: "bound at account\nall verbs on widgets from core.example.io\n☑ maximal permission policy · local",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(pie.RenderOverviewD2(tt.model))
+			if want := fmt.Sprintf("\"story\": %q {class: story;", tt.want); !strings.Contains(got, want) {
+				t.Errorf("RenderOverviewD2() =\n%s\nwant a line with %s", got, want)
+			}
+		})
+	}
+}
+
+func TestRenderOverviewD2WarnsOnTheExportBox(t *testing.T) {
+	system := pie.Export{Path: "pms/system.yaml", Doc: 1, Name: "system.example.io"}
+	account := pie.WorkspaceType{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "system.example.io"}}}
+	tests := []struct {
+		name  string
+		model pie.Model
+		want  string
+	}{
+		{
+			name:  "a v1alpha1 export says in orange, right under its story, that kcp deprecates the version and its claims get all verbs",
+			model: pie.Model{Exports: []pie.Export{withV1alpha1(withClaims(system, pie.Claim{Resource: "secrets", Verbs: []string{"*"}}))}, WorkspaceTypes: []pie.WorkspaceType{account}},
+			want: `  "workspace:root:pms"."apiexport:pms/system.yaml#1": {
+    label: "system.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "warnings": "! apis.kcp.io/v1alpha1 is deprecated; claims get verbs *" {class: warning; height: 17}
+  }
+`,
+		},
+		{
+			name: "a line per warning, so a claim with a literal identity hash of an export whose identity kcp generates is one more",
+			model: pie.Model{Exports: []pie.Export{coreExportAt("pms/core.yaml"),
+				withV1alpha1(withClaims(system, pie.Claim{Group: "core.example.io", Resource: "widgets", Verbs: []string{"get"}, FromExport: true, LiteralHash: true}))}},
+			want: `    "warnings": "! apis.kcp.io/v1alpha1 is deprecated; claims get verbs *\n! identityHash for widgets is a literal; core.example.io's identity differs per installation" {class: warning; height: 34}`,
+		},
+		{
+			name: "an export in a later document of its file has its own warnings",
+			model: pie.Model{Exports: []pie.Export{{Path: "pms/system.yaml", Doc: 1, Name: "first.example.io"},
+				withV1alpha1(pie.Export{Path: "pms/system.yaml", Doc: 2, Name: "second.example.io"})}},
+			want: `  "apiexport:pms/system.yaml#2": {
+    label: "second.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "warnings": "! apis.kcp.io/v1alpha1 is deprecated" {class: warning; height: 17}
+  }
+`,
+		},
+		{
+			name:  "without claims it says only that the version is deprecated",
+			model: pie.Model{Exports: []pie.Export{withV1alpha1(system)}},
+			want:  `    "warnings": "! apis.kcp.io/v1alpha1 is deprecated" {class: warning; height: 17}`,
+		},
+		{
+			name:  "the legend shows an export box with a warning when one is drawn",
+			model: pie.Model{Exports: []pie.Export{withV1alpha1(system)}, WorkspaceTypes: []pie.WorkspaceType{account}},
+			want: `  "warning": {
+    label: "APIExport"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "warnings": "! a warning, also printed on stderr" {class: warning; height: 17}
+  }
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderOverviewD2(tt.model)); !strings.Contains(got, tt.want) {
+				t.Errorf("RenderOverviewD2() =\n%s\nwant it to hold\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderOverviewDiffD2MarksWhatAnExportLeavesOpenAsItChanges(t *testing.T) {
+	core := coreExportAt("pms/core.yaml")
+	tests := []struct {
+		name string
+		a, b pie.Model
+		want string
+	}{
+		{
+			name: "a policy B sets is marked as the other lines of the box are",
+			a:    pie.Model{Exports: []pie.Export{core}},
+			b: pie.Model{Exports: []pie.Export{func() pie.Export {
+				e := core
+				e.MaximalPermissionPolicy = "local"
+				return e
+			}()}},
+			want: "+☑ maximal permission policy · local\n−☐ maximal permission policy",
+		},
+	}
+	warnings := []struct {
+		name string
+		a, b pie.Model
+		want string
+	}{
+		{
+			name: "a warning only A has is marked gone, in its orange line",
+			a:    pie.Model{Exports: []pie.Export{withV1alpha1(core)}},
+			b:    pie.Model{Exports: []pie.Export{core}},
+			want: `"warnings": "−! apis.kcp.io/v1alpha1 is deprecated" {class: warning; height: 17}`,
+		},
+		{
+			name: "one only B has is marked new",
+			a:    pie.Model{Exports: []pie.Export{core}},
+			b:    pie.Model{Exports: []pie.Export{withV1alpha1(core)}},
+			want: `"warnings": "+! apis.kcp.io/v1alpha1 is deprecated" {class: warning; height: 17}`,
+		},
+	}
+	for _, tt := range warnings {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderOverviewDiffD2(tt.a, tt.b)); !strings.Contains(got, tt.want) {
+				t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, tt.want)
+			}
+		})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(pie.RenderOverviewDiffD2(tt.a, tt.b))
+			if want := fmt.Sprintf("\"story\": %q {class: story;", tt.want); !strings.Contains(got, want) {
+				t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, want)
 			}
 		})
 	}
@@ -4104,18 +4518,26 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:ws/core.yaml#1": "core.example.io" {class: export}
+  "apiexport:ws/core.yaml#1": {
+    label: "core.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
   "apiexport:ws/reader.yaml#1": {
     label: "reader.example.io"
     class: export
     grid-columns: 1
-    "story": "reads widgets from core.example.io" {class: story}
+    grid-gap: 0
+    "story": "reads widgets from core.example.io\n☐ maximal permission policy" {class: story; height: 34}
   }
   "apiexport:ws/admin.yaml#1": {
     label: "admin.example.io"
     class: export
     grid-columns: 1
-    "story": "all verbs on widgets, gadgets from core.example.io" {class: story}
+    grid-gap: 0
+    "story": "all verbs on widgets, gadgets from core.example.io\n☐ maximal permission policy" {class: story; height: 34}
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
@@ -4155,12 +4577,19 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:ws/core.yaml#1": "core.example.io" {class: export}
+  "apiexport:ws/core.yaml#1": {
+    label: "core.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
   "apiexport:ws/terminal.yaml#1": {
     label: "terminal.example.io"
     class: export
     grid-columns: 1
-    "story": "reads widgets from core.example.io\nwrites gadgets from core.example.io" {class: story}
+    grid-gap: 0
+    "story": "reads widgets from core.example.io\nwrites gadgets from core.example.io\n☐ maximal permission policy" {class: story; height: 51}
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
@@ -4198,7 +4627,13 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:ws/core.yaml#1": "core.example.io" {class: export}
+  "apiexport:ws/core.yaml#1": {
+    label: "core.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · selected" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
@@ -4266,8 +4701,20 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:ws/core.yaml#1": "core.example.io" {class: export}
-  "apiexport:ws/other.yaml#1": "other.example.io" {class: export}
+  "apiexport:ws/core.yaml#1": {
+    label: "core.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
+  "apiexport:ws/other.yaml#1": {
+    label: "other.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."exported" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:apis.kcp.io" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
@@ -4313,8 +4760,20 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:ws/core.yaml#1": "core.example.io" {class: export}
-  "apiexport:ws/providers.yaml#1": "providers.example.io" {class: export}
+  "apiexport:ws/core.yaml#1": {
+    label: "core.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
+  "apiexport:ws/providers.yaml#1": {
+    label: "providers.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · selected" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
 "apiexports"."apiexport:ws/providers.yaml#1" -> "resources"."builtin"."group:": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
@@ -4342,8 +4801,20 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:ws/gateway.yaml#1": "gateway.example.io" {class: export}
-  "apiexport:ws/other.yaml#1": "other.example.io" {class: export}
+  "apiexport:ws/gateway.yaml#1": {
+    label: "gateway.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
+  "apiexport:ws/other.yaml#1": {
+    label: "other.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 "apiexports"."apiexport:ws/gateway.yaml#1" -> "resources"."group:gateway.networking.k8s.io"."gateways.gateway.networking.k8s.io" {style.stroke: "#868e96"}
 "apiexports"."apiexport:ws/other.yaml#1" -> "resources"."group:gateway.networking.k8s.io"."httproutes.gateway.networking.k8s.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
@@ -4371,8 +4842,20 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:ws/core.yaml#1": "core.example.io" {class: export}
-  "apiexport:ws/other.yaml#1": "other.example.io" {class: export}
+  "apiexport:ws/core.yaml#1": {
+    label: "core.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
+  "apiexport:ws/other.yaml#1": {
+    label: "other.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."apiexport:ws/other.yaml#1" -> "resources"."group:core.example.io"."sprockets.core.example.io": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
@@ -4407,6 +4890,10 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 	}
 	consumer := func(name, label string) string {
 		return fmt.Sprintf("  %q: %q {class: workspacetype}\n", "workspacetype:types/"+name+".yaml#1", label)
+	}
+	withLifecycle := func(wt pie.WorkspaceType, initializer, terminator bool) pie.WorkspaceType {
+		wt.Initializer, wt.Terminator = initializer, terminator
+		return wt
 	}
 	tests := []struct {
 		name  string
@@ -4450,12 +4937,50 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 				Workspaces: []pie.Workspace{{Path: "ws/b.yaml", Doc: 1, Name: "b", Type: pie.TypeRef{Path: "root", Name: "base"}}},
 			},
 			want: column(
-				consumer("account", "account\nextends base, mixin, hub, universal"),
-				consumer("base", "base"),
+				consumer("account", "account\nextends base, mixin, hub, universal (not in tree)"),
+				consumer("base", "base\nworkspace b"),
 				consumer("holder", "holder"),
 				consumer("mixin", "holder › mixin"),
 				consumer("hub", "hub"),
 				consumer("spoke", "hub › spoke"),
+			),
+		},
+		{
+			name: "a consumer says which types initialize and terminate its workspaces, itself or through the types it extends, and which workspaces the tree has of its type",
+			model: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{
+					typ("orgs", nil, []string{"org"}),
+					withLifecycle(typ("security", nil, nil), true, true),
+					typ("org", nil, nil, "security"),
+					typ("account", []string{"org"}, nil, "org"),
+					withLifecycle(typ("gate", nil, nil), true, false),
+					withLifecycle(typ("init", nil, nil), true, false),
+					withLifecycle(typ("term", nil, nil), false, true),
+					typ("mixed", nil, nil, "init", "term", "universal"),
+				},
+				Workspaces: []pie.Workspace{
+					{Path: "ws/orgs.yaml", Doc: 1, Name: "orgs", Type: pie.TypeRef{Path: "root", Name: "orgs"}},
+					{Path: "ws/a1.yaml", Doc: 1, Name: "a1", Type: pie.TypeRef{Path: "root", Name: "account"}},
+					{Path: "ws/a2.yaml", Doc: 1, Name: "a2", Type: pie.TypeRef{Path: "root", Name: "account"}},
+				},
+			},
+			want: column(
+				consumer("orgs", "orgs\nworkspace orgs"),
+				consumer("org", "orgs › org\nextends security\ninitialized and terminated by security"),
+				consumer("account", "orgs › org › account\nextends org\ninitialized and terminated by security\nworkspaces a1, a2"),
+				consumer("gate", "gate\ninitialized by gate"),
+				consumer("mixed", "mixed\nextends init, term, universal (not in tree)\ninitialized by init\nterminated by term"),
+			),
+		},
+		{
+			name: "a loop of types extending each other is followed once",
+			model: pie.Model{WorkspaceTypes: []pie.WorkspaceType{
+				withLifecycle(typ("a", nil, []string{"b"}, "b"), true, false),
+				typ("b", nil, nil, "a"),
+			}},
+			want: column(
+				consumer("a", "a\nextends b\ninitialized by a"),
+				consumer("b", "a › b\nextends a\ninitialized by a"),
 			),
 		},
 		{
@@ -4547,7 +5072,8 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -4581,7 +5107,8 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account\nexisting workspaces keep gadgets" {class: story}
+    grid-gap: 0
+    "story": "bound at account\nexisting workspaces keep gadgets\n☐ maximal permission policy" {class: story; height: 51}
   }
   "workspace:root:pms"."apiexport:other.example.io": {
     label: "other.example.io"
@@ -4589,7 +5116,8 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     style.stroke: "#1098ad"
     style.fill: "#e3fafc"
     grid-columns: 1
-    "story": "bound at account (new workspaces only)" {class: story}
+    grid-gap: 0
+    "story": "bound at account (new workspaces only)\n☐ maximal permission policy" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -4636,7 +5164,8 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:old.example.io": {
     label: "old.example.io"
@@ -4644,7 +5173,8 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     style.stroke: "#ae3ec9"
     style.fill: "#f8f0fc"
     grid-columns: 1
-    "story": "bound at org" {class: story}
+    grid-gap: 0
+    "story": "bound at org\n☐ maximal permission policy" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -4673,12 +5203,19 @@ func TestRenderOverviewDiffD2(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:core.example.io": "core.example.io" {class: export}
+  "apiexport:core.example.io": {
+    label: "core.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
   "apiexport:reader.example.io": {
     label: "reader.example.io"
     class: export
     grid-columns: 1
-    "story": "+writes widgets from core.example.io\n−reads widgets from core.example.io" {class: story}
+    grid-gap: 0
+    "story": "+writes widgets from core.example.io\n−reads widgets from core.example.io\n☐ maximal permission policy" {class: story; height: 51}
   }
 }
 "apiexports"."apiexport:core.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
@@ -4708,7 +5245,8 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     label: "a.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:b.example.io": {
     label: "b.example.io"
@@ -4716,7 +5254,8 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     style.stroke: "#1098ad"
     style.fill: "#e3fafc"
     grid-columns: 1
-    "story": "bound at account (new workspaces only)" {class: story}
+    grid-gap: 0
+    "story": "bound at account (new workspaces only)\n☐ maximal permission policy" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -4754,9 +5293,18 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account" {class: story}
+    grid-gap: 0
+    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
   }
-  "apiexport:other.example.io": "other.example.io" {class: export; style.stroke: "#1098ad"; style.fill: "#e3fafc"}
+  "apiexport:other.example.io": {
+    label: "other.example.io"
+    class: export
+    style.stroke: "#1098ad"
+    style.fill: "#e3fafc"
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 "consumers": {
   label: "CONSUMERS"
@@ -4795,8 +5343,20 @@ func TestRenderOverviewDiffD2(t *testing.T) {
 "apiexports": {
   label: "APIEXPORTS"
   class: column
-  "apiexport:core.example.io": "core.example.io" {class: export}
-  "apiexport:reader.example.io": "reader.example.io" {class: export}
+  "apiexport:core.example.io": {
+    label: "core.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
+  "apiexport:reader.example.io": {
+    label: "reader.example.io"
+    class: export
+    grid-columns: 1
+    grid-gap: 0
+    "story": "☐ maximal permission policy" {class: story; height: 17}
+  }
 }
 "apiexports"."apiexport:core.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."apiexport:reader.example.io" -> "resources"."builtin": "read" {style.stroke: "#1098ad"; style.stroke-dash: 4}
@@ -4872,7 +5432,8 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account, org, y, −guest (existing workspaces keep it)\nexisting workspaces keep anchors, gadgets" {class: story}
+    grid-gap: 0
+    "story": "bound at account, org, y, −guest (existing workspaces keep it)\nexisting workspaces keep anchors, gadgets\n☐ maximal permission policy" {class: story; height: 51}
   }
   "workspace:root:pms"."apiexport:tools.example.io": {
     label: "tools.example.io"
@@ -4880,7 +5441,8 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     style.stroke: "#1098ad"
     style.fill: "#e3fafc"
     grid-columns: 1
-    "story": "bound at org (new workspaces only), guest (new workspaces only), team" {class: story}
+    grid-gap: 0
+    "story": "bound at org (new workspaces only), guest (new workspaces only), team\n☐ maximal permission policy" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -4938,13 +5500,15 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     label: "core.example.io"
     class: export
     grid-columns: 1
-    "story": "bound at account, +team, a/bind, +b/bind, −org" {class: story}
+    grid-gap: 0
+    "story": "bound at account, +team, a/bind, +b/bind, −org\n☐ maximal permission policy" {class: story; height: 34}
   }
   "apiexport:reader.example.io": {
     label: "reader.example.io"
     class: export
     grid-columns: 1
-    "story": "+writes widgets from core.example.io\n−reads widgets from core.example.io" {class: story}
+    grid-gap: 0
+    "story": "+writes widgets from core.example.io\n−reads widgets from core.example.io\n☐ maximal permission policy" {class: story; height: 51}
   }
 }
 "consumers": {

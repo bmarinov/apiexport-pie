@@ -125,7 +125,9 @@ func (s *scan) addDocument(name string, n int, doc []byte) {
 			s.report(Warning, name, n, fmt.Sprintf("APIExport does not convert to v1alpha2: %v", err))
 			return
 		}
-		s.model.Exports = append(s.model.Exports, exportFrom(name, n, export))
+		e := exportFrom(name, n, export)
+		e.V1alpha1 = true
+		s.model.Exports = append(s.model.Exports, e)
 	case apiResourceSchemaKind:
 		var ars apisv1alpha1.APIResourceSchema
 		if s.decode(name, n, kind, doc, &ars) {
@@ -244,6 +246,9 @@ func (s *scan) report(level Level, name string, n int, reason string) {
 
 func exportFrom(file string, doc int, export apisv1alpha2.APIExport) Export {
 	e := Export{Path: file, Doc: doc, Name: export.Name, IdentitySecret: export.Spec.Identity != nil && export.Spec.Identity.SecretRef != nil}
+	if p := export.Spec.MaximalPermissionPolicy; p != nil && p.Local != nil {
+		e.MaximalPermissionPolicy = "local"
+	}
 	for _, r := range export.Spec.Resources {
 		e.Resources = append(e.Resources, Resource{Group: r.Group, Name: r.Name, Schema: r.Schema})
 	}
@@ -258,6 +263,7 @@ func exportFrom(file string, doc int, export apisv1alpha2.APIExport) Export {
 func workspaceTypeFrom(file string, doc int, wt tenancyv1alpha1.WorkspaceType) WorkspaceType {
 	t := WorkspaceType{Path: file, Doc: doc, Name: wt.Name}
 	t.Maintains = wt.Spec.DefaultAPIBindingLifecycle != nil && *wt.Spec.DefaultAPIBindingLifecycle == tenancyv1alpha1.APIBindingLifecycleModeMaintain
+	t.Initializer, t.Terminator = wt.Spec.Initializer, wt.Spec.Terminator
 	for _, ref := range wt.Spec.DefaultAPIBindings {
 		t.Binds = append(t.Binds, ExportRef{Path: ref.Path, Name: ref.Export})
 	}
