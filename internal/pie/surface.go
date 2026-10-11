@@ -125,7 +125,11 @@ func surfaceOf(m Model) surface {
 		for _, name := range c.exports {
 			if !slices.Contains(drawn, name) {
 				drawn = append(drawn, name)
-				block(name, []surfaceRow{{lines: []string{"(outside the tree)"}}}, nil)
+				where := "(outside the tree)"
+				if slices.Contains(c.kcp, name) {
+					where = "(kcp)"
+				}
+				block(name, []surfaceRow{{lines: []string{where}}}, nil)
 			}
 		}
 	}
@@ -168,7 +172,7 @@ func RenderSurface(m Model) []byte {
 	for _, list := range []struct {
 		head  string
 		lines []string
-	}{{"Warnings", warnings}, {"Worth a look", notes}} {
+	}{{"Warnings", warnings}, {"Notices", notes}} {
 		if len(list.lines) == 0 {
 			continue
 		}

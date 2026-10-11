@@ -155,20 +155,29 @@ func cohesionNotices(m Model, exports []Export) []finding {
 	bound := map[string]bool{}
 	for _, t := range m.WorkspaceTypes {
 		bindings := bindingsOf(t, m.WorkspaceTypes)
-		var outside []string
+		var outside, ofKcp []string
 		inside := false
 		for _, bd := range bindings {
 			bound[bd.ref.Name] = true
-			switch {
-			case len(exportsNamed(bd.ref.Name, exports)) > 0:
+			if len(exportsNamed(bd.ref.Name, exports)) > 0 {
 				inside = true
-			case !slices.Contains(outside, bd.ref.Name):
-				outside = append(outside, bd.ref.Name)
+				continue
+			}
+			// bindingsOf lists each reference once, and kcp's are all in root: no name comes twice.
+			name := bd.ref.Name
+			if isKcpExport(bd.ref) {
+				name += " (kcp)"
+				ofKcp = append(ofKcp, bd.ref.Name)
+			}
+			if !slices.Contains(outside, name) {
+				outside = append(outside, name)
 			}
 		}
 		switch {
 		case len(bindings) == 0:
 			note("bindings of "+t.Name, t.Path, t.Doc, "WorkspaceType %s binds no APIExport", t.Name)
+		case !inside && len(ofKcp) == len(outside):
+			note("bindings of "+t.Name, t.Path, t.Doc, "WorkspaceType %s binds only kcp's APIExports: %s", t.Name, strings.Join(ofKcp, ", "))
 		case !inside:
 			note("bindings of "+t.Name, t.Path, t.Doc, "WorkspaceType %s binds only APIExports from outside the tree: %s", t.Name, strings.Join(outside, ", "))
 		}

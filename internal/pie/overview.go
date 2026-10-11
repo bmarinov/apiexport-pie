@@ -30,8 +30,6 @@ const overviewClasses = `classes: {
   story: {style: {fill: transparent; stroke: transparent; font-size: 13; bold: false; font-color: "#343a40"}}
   warning: {style: {fill: transparent; stroke: transparent; font-size: 13; bold: true; font-color: "#e8590c"}}
   workspace: {style: {fill: "#f8f9fa"; stroke: "#868e96"; font-size: 15; border-radius: 8}}
-  outside: {style: {fill: transparent; stroke: "#868e96"; stroke-dash: 3; font-size: 14}}
-  outside-export: {style: {fill: "#f8f9fa"; stroke: "#868e96"; stroke-dash: 3; font-size: 14; border-radius: 6}}
   workspacetype: {style: {fill: "#e7f5ff"; stroke: "#1971c2"; font-size: 15; border-radius: 6}}
   apibindings: {style: {fill: "#ebfbee"; stroke: "#2f9e44"; font-size: 15; border-radius: 6}}
   claimed: {style: {fill: transparent; stroke: "#adb5bd"; stroke-dash: 3; font-size: 15; border-radius: 6}}
@@ -111,7 +109,6 @@ type overview struct {
 	areas      []resourceArea
 	workspaces []string
 	exports    []exportBox
-	outside    []outsideBox
 	consumers  []consumerBox
 	edges      []overviewEdge
 }
@@ -156,18 +153,63 @@ func (e exportBox) story() []string {
 	return append(story, e.open...)
 }
 
-// outsideBox is an export bound from outside the tree, named with the workspace it is bound from.
-type outsideBox struct {
-	name string
-	in   presence
-}
-
-// consumerBox is a consumer in CONSUMERS. changed, in a diff, lists the kinds a consumer both trees
-// have had only in A and got only in B, by tree.
+// consumerBox is a consumer in CONSUMERS. outside lists the exports it binds that the tree does not
+// define, which its title names rather than an arrow across the picture. changed, in a diff, lists
+// the kinds a consumer both trees have had only in A and got only in B, by tree.
 type consumerBox struct {
 	id, label, class string
+	outside          []outsideRef
 	in               presence
 	changed          map[presence][]string
+}
+
+// outsideRef is an export outside the tree a consumer binds: its name, the workspace it is bound
+// from, the type in the tree the consumer binds it through, if not itself, and whether it is kcp's own.
+type outsideRef struct {
+	name, at, via string
+	kcp           bool
+}
+
+// title is a consumer's label, then a line per type it binds exports outside the tree through,
+// itself first, kcp's own apart from the others: "binds tenancy.kcp.io, topology.kcp.io @ root (kcp)".
+func (p consumerBox) title() string {
+	lines := []string{p.label}
+	type source struct {
+		via string
+		kcp bool
+	}
+	var sources []source
+	for _, r := range p.outside {
+		if s := (source{via: r.via, kcp: r.kcp}); !slices.Contains(sources, s) {
+			sources = append(sources, s)
+		}
+	}
+	for _, s := range sources {
+		var ats []string
+		names := map[string][]string{}
+		for _, r := range p.outside {
+			if r.via != s.via || r.kcp != s.kcp {
+				continue
+			}
+			if len(names[r.at]) == 0 {
+				ats = append(ats, r.at)
+			}
+			names[r.at] = append(names[r.at], r.name)
+		}
+		groups := make([]string, 0, len(ats))
+		for _, at := range ats {
+			groups = append(groups, strings.Join(names[at], ", ")+" @ "+at)
+		}
+		note := "not in tree"
+		if s.kcp {
+			note = "kcp"
+		}
+		if s.via != "" {
+			note += ", through " + s.via
+		}
+		lines = append(lines, "binds "+strings.Join(groups, "; ")+" ("+note+")")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // overviewEdge is an arrow between d2 paths, drawn in the style of its relation.
@@ -230,7 +272,7 @@ func overviewOf(m Model, byName bool) overview {
 	// boundBy lists, by export name, the consumers binding it, for its box.
 	boundBy := map[string][]consumerRef{}
 	boundAt := func(id, label, name, class string, bound []binding) {
-		o.consumers = append(o.consumers, consumerBox{id: id, label: label, class: class})
+		var outside []outsideRef
 		conflicts := conflictsAmong(bound, resources)
 		for _, bd := range bound {
 			if !slices.ContainsFunc(boundBy[bd.ref.Name], func(p consumerRef) bool { return p.name == name }) {
@@ -247,21 +289,15 @@ func overviewOf(m Model, byName bool) overview {
 			if len(with) > 0 {
 				r, label = bindsRefused, "conflicts with "+strings.Join(with, ", ")
 			}
-			var targets []string
-			for _, e := range exportsNamed(bd.ref.Name, m.Exports) {
-				targets = append(targets, exportAt(e))
-			}
+			targets := exportsNamed(bd.ref.Name, m.Exports)
 			if len(targets) == 0 {
-				box := bd.ref.Name + " @ " + workspaceOf(bd.ref)
-				if !slices.Contains(o.outside, outsideBox{name: box}) {
-					o.outside = append(o.outside, outsideBox{name: box})
-				}
-				targets = append(targets, d2Path(exportsColumn, outsideID, box))
+				outside = append(outside, outsideRef{name: bd.ref.Name, at: workspaceOf(bd.ref), via: bd.via, kcp: isKcpExport(bd.ref)})
 			}
 			for _, target := range targets {
-				edge(r, d2Path(consumersColumn, id), target, label)
+				edge(r, d2Path(consumersColumn, id), exportAt(target), label)
 			}
 		}
+		o.consumers = append(o.consumers, consumerBox{id: id, label: label, class: class, outside: outside})
 	}
 	for _, p := range placesOf(m) {
 		id := "workspacetype:" + location(p.t.Path, p.t.Doc)
@@ -273,7 +309,9 @@ func overviewOf(m Model, byName bool) overview {
 	dirs := bindingsByDir(m.APIBindings)
 	names := shortDirNames(dirs)
 	for _, dir := range dirs {
-		boundAt("apibindings:"+dir.dir, "APIBindings in "+dir.dir, names[dir.dir], "apibindings", dir.bound)
+		// The short name, as the boxes of the exports it binds say it: a tree scanned from a repository's
+		// root otherwise has its longest titles here.
+		boundAt("apibindings:"+dir.dir, "APIBindings in "+names[dir.dir], names[dir.dir], "apibindings", dir.bound)
 	}
 
 	for _, e := range m.Exports {
@@ -325,7 +363,7 @@ func (o overview) d2() []byte {
 		}
 		b.WriteString("}\n")
 	}
-	if len(o.exports) > 0 || len(o.outside) > 0 {
+	if len(o.exports) > 0 {
 		openColumn(&b, exportsColumn, "APIEXPORTS")
 		for _, ws := range o.workspaces {
 			fmt.Fprintf(&b, "  %q: %q {class: workspace}\n", workspaceID(ws), "Workspace "+ws)
@@ -342,27 +380,20 @@ func (o overview) d2() []byte {
 			}
 			b.WriteString("  }\n")
 		}
-		if len(o.outside) > 0 {
-			fmt.Fprintf(&b, "  %q: {\n    label: \"outside the tree\"\n    class: outside\n", outsideID)
-			for _, box := range o.outside {
-				fmt.Fprintf(&b, "    %q: {class: outside-export%s}\n", box.name, box.in.look())
-			}
-			b.WriteString("  }\n")
-		}
 		b.WriteString("}\n")
 	}
 	if len(o.consumers) > 0 {
 		openColumn(&b, consumersColumn, "CONSUMERS")
 		for _, p := range o.consumers {
 			if p.changed == nil {
-				fmt.Fprintf(&b, "  %q: %q {class: %s%s}\n", p.id, p.label, p.class, p.in.look())
+				fmt.Fprintf(&b, "  %q: %q {class: %s%s}\n", p.id, p.title(), p.class, p.in.look())
 				continue
 			}
 			// A container's label is not bold, as a box's is; its tags stack under it.
-			fmt.Fprintf(&b, "  %q: {\n    label: %q\n    class: %s\n    style.bold: true\n    grid-columns: 1\n    grid-gap: 4\n", p.id, p.label, p.class)
+			fmt.Fprintf(&b, "  %q: {\n    label: %q\n    class: %s\n    style.bold: true\n    grid-columns: 1\n    grid-gap: 4\n", p.id, p.title(), p.class)
 			for _, in := range []presence{onlyInA, onlyInB} {
 				if kinds := p.changed[in]; len(kinds) > 0 {
-					fmt.Fprintf(&b, "    %q: %q {%s}\n", tagKeys[in], wrapped(tagHeads[in], kinds, tagWidth(p.label)), in.tag())
+					fmt.Fprintf(&b, "    %q: %q {%s}\n", tagKeys[in], wrapped(tagHeads[in], kinds, tagWidth(p.title())), in.tag())
 				}
 			}
 			b.WriteString("  }\n")
@@ -537,12 +568,14 @@ func needsOf(e Export, serving map[string][]string) []string {
 }
 
 // openOf says what an export leaves open: whether a maximal permission policy caps what consumers
-// may do with what it serves.
+// may do with what it serves. It reads as the field does, with "none" for an export that sets none,
+// which kcp allows: a mark on that line would read as a fault.
 func openOf(e Export) []string {
-	if e.MaximalPermissionPolicy == "" {
-		return []string{"☐ maximal permission policy"}
+	policy := e.MaximalPermissionPolicy
+	if policy == "" {
+		policy = "none"
 	}
-	return []string{"☑ maximal permission policy · " + e.MaximalPermissionPolicy}
+	return []string{"maximalPermissionPolicy: " + policy}
 }
 
 // warningLines are what is wrong with an export as written, as its box says it.

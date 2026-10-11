@@ -879,7 +879,7 @@ func TestRenderD2DrawsConsumers(t *testing.T) {
 			name: "a WorkspaceType names the workspaces in the tree that are of its type",
 			model: pie.Model{
 				WorkspaceTypes: []pie.WorkspaceType{
-					{Path: "types/orgs.yaml", Doc: 1, Name: "orgs", Extends: []pie.TypeRef{{Path: "root", Name: "universal"}}},
+					{Path: "types/orgs.yaml", Doc: 1, Name: "orgs", Extends: []pie.TypeRef{{Path: "root", Name: "shared"}}},
 					{Path: "types/account.yaml", Doc: 1, Name: "account"},
 				},
 				Workspaces: []pie.Workspace{
@@ -891,7 +891,7 @@ func TestRenderD2DrawsConsumers(t *testing.T) {
 			},
 			want: `"workspacetype:types/orgs.yaml#1": {
   shape: sql_table
-  label: "WorkspaceType orgs · extends universal (not in tree) · workspace orgs"
+  label: "WorkspaceType orgs · extends shared (not in tree) · workspace orgs"
 }
 "workspacetype:types/account.yaml#1": {
   shape: sql_table
@@ -923,12 +923,12 @@ func TestRenderD2DrawsConsumers(t *testing.T) {
 "outside": {
   label: "APIExports outside the tree"
   style.stroke-dash: 3
-  "tenancy.kcp.io @ root"
+  "tenancy.kcp.io @ root (kcp)"
   "local.example.io @ (own workspace)"
 }
-"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root (kcp)" {style.stroke: "#1971c2"}
 "workspacetype:types/account.yaml#1"."local.example.io" -> "outside"."local.example.io @ (own workspace)" {style.stroke: "#1971c2"}
-"workspacetype:types/org.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+"workspacetype:types/org.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root (kcp)" {style.stroke: "#1971c2"}
 ` + legend(legendBindsByDefault),
 		},
 		{
@@ -938,7 +938,7 @@ func TestRenderD2DrawsConsumers(t *testing.T) {
 				WorkspaceTypes: []pie.WorkspaceType{
 					{Path: "types/account.yaml", Doc: 1, Name: "account",
 						Binds:   []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}},
-						Extends: []pie.TypeRef{{Path: "root", Name: "security"}, {Path: "root", Name: "universal"}}},
+						Extends: []pie.TypeRef{{Path: "root", Name: "security"}, {Path: "root", Name: "shared"}}},
 					{Path: "types/security.yaml", Doc: 1, Name: "security",
 						Binds:   []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}, {Path: "root:audit", Name: "audit.example.io"}},
 						Extends: []pie.TypeRef{{Path: "root", Name: "base"}}},
@@ -948,7 +948,7 @@ func TestRenderD2DrawsConsumers(t *testing.T) {
 			},
 			want: `"workspacetype:types/account.yaml#1": {
   shape: sql_table
-  label: "WorkspaceType account · extends security, universal (not in tree)"
+  label: "WorkspaceType account · extends security, shared (not in tree)"
   "core.example.io": "root:pms"
   "audit.example.io": "root:audit · via security"
   "tenancy.kcp.io": "root · via base"
@@ -969,16 +969,37 @@ func TestRenderD2DrawsConsumers(t *testing.T) {
   label: "APIExports outside the tree"
   style.stroke-dash: 3
   "audit.example.io @ root:audit"
-  "tenancy.kcp.io @ root"
+  "tenancy.kcp.io @ root (kcp)"
 }
 "workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
 "workspacetype:types/account.yaml#1"."audit.example.io" -> "outside"."audit.example.io @ root:audit" {style.stroke: "#1971c2"; style.stroke-dash: 2}
-"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root (kcp)" {style.stroke: "#1971c2"; style.stroke-dash: 2}
 "workspacetype:types/security.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
 "workspacetype:types/security.yaml#1"."audit.example.io" -> "outside"."audit.example.io @ root:audit" {style.stroke: "#1971c2"}
-"workspacetype:types/security.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"; style.stroke-dash: 2}
-"workspacetype:types/base.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+"workspacetype:types/security.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root (kcp)" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+"workspacetype:types/base.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root (kcp)" {style.stroke: "#1971c2"}
 ` + legend(legendBindsByDefault, legendBindsThroughExtend),
+		},
+		{
+			name: "a type extending universal in root binds kcp's tenancy.kcp.io and topology.kcp.io through it",
+			model: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/orgs.yaml", Doc: 1, Name: "orgs", Extends: []pie.TypeRef{{Path: "root", Name: "universal"}}}},
+			},
+			want: `"workspacetype:types/orgs.yaml#1": {
+  shape: sql_table
+  label: "WorkspaceType orgs · extends universal (kcp)"
+  "tenancy.kcp.io": "root · via universal"
+  "topology.kcp.io": "root · via universal"
+}
+"outside": {
+  label: "APIExports outside the tree"
+  style.stroke-dash: 3
+  "tenancy.kcp.io @ root (kcp)"
+  "topology.kcp.io @ root (kcp)"
+}
+"workspacetype:types/orgs.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root (kcp)" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+"workspacetype:types/orgs.yaml#1"."topology.kcp.io" -> "outside"."topology.kcp.io @ root (kcp)" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+` + legend(legendBindsThroughExtend),
 		},
 		{
 			name: "APIBinding files are grouped by directory, each listing the exports bound there once",
@@ -1032,10 +1053,10 @@ func TestRenderD2DrawsConsumers(t *testing.T) {
 "outside": {
   label: "APIExports outside the tree"
   style.stroke-dash: 3
-  "tenancy.kcp.io @ root"
+  "tenancy.kcp.io @ root (kcp)"
 }
-"workspacetype:types/org.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
-"apibindings:pms"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#2f9e44"}
+"workspacetype:types/org.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root (kcp)" {style.stroke: "#1971c2"}
+"apibindings:pms"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root (kcp)" {style.stroke: "#2f9e44"}
 ` + legend(legendBindsByDefault, legendBindsByAPIBinding),
 		},
 		{
@@ -1419,11 +1440,11 @@ func TestRenderD2FlagsBindingsKcpRefuses(t *testing.T) {
 "outside": {
   label: "APIExports outside the tree"
   style.stroke-dash: 3
-  "tenancy.kcp.io @ root"
+  "tenancy.kcp.io @ root (kcp)"
 }
 "workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
 "workspacetype:types/account.yaml#1"."core.example.io" -> "workspace:root:pms"."apiexport:test/core.yaml#1" {style.stroke: "#1971c2"}
-"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root (kcp)" {style.stroke: "#1971c2"}
 ` + legend(legendBindsByDefault),
 		},
 	}
@@ -1860,7 +1881,18 @@ func TestCheckPointsOutWhatIsWorthALook(t *testing.T) {
 					typeBinding("account", inPMS("core.example.io"), inRoot("tenancy.kcp.io")),
 				},
 			},
-			want: []string{"notice: types/providers.yaml#1: WorkspaceType providers binds only APIExports from outside the tree: tenancy.kcp.io, topology.kcp.io"},
+			want: []string{"notice: types/providers.yaml#1: WorkspaceType providers binds only APIExports from outside the tree: tenancy.kcp.io (kcp), topology.kcp.io (kcp), tenancy.kcp.io"},
+		},
+		{
+			name: "a WorkspaceType that binds only what kcp's universal in root binds",
+			model: pie.Model{
+				Exports: []pie.Export{core},
+				WorkspaceTypes: []pie.WorkspaceType{
+					{Path: "types/orgs.yaml", Doc: 1, Name: "orgs", Extends: []pie.TypeRef{{Path: "root", Name: "universal"}}},
+					typeBinding("account", inPMS("core.example.io")),
+				},
+			},
+			want: []string{"notice: types/orgs.yaml#1: WorkspaceType orgs binds only kcp's APIExports: tenancy.kcp.io, topology.kcp.io"},
 		},
 		{
 			name: "an export nothing in the tree binds, when the tree binds anything at all",
@@ -1960,7 +1992,7 @@ func TestCheckPointsOutWhereClaimsReach(t *testing.T) {
 			},
 		},
 		{
-			name: "an export that may write kcp's own resources says where, leaving out binding files that refuse",
+			name: "an export that claims write on kcp's own resources says where, leaving out binding files that refuse",
 			model: pie.Model{
 				Exports: []pie.Export{export("a.example.io", nil,
 					claim("tenancy.kcp.io", "workspaces", "*"),
@@ -1976,7 +2008,7 @@ func TestCheckPointsOutWhereClaimsReach(t *testing.T) {
 						Accepts: []pie.GroupResource{{Group: "apis.kcp.io", Resource: "apibindings"}, {Resource: "secrets"}}},
 				},
 			},
-			want: []string{"notice: pms/a.example.io.yaml#1: APIExport a.example.io may write kcp's own resources where account and APIBindings in pms bind it: * on workspaces; update on logicalclusters"},
+			want: []string{"notice: pms/a.example.io.yaml#1: APIExport a.example.io claims write on kcp's own resources where account and APIBindings in pms bind it: * on workspaces; update on logicalclusters"},
 		},
 		{
 			name:  "an export nothing binds reaches nowhere",
@@ -2054,7 +2086,7 @@ func TestCheckPointsOutWhereClaimsReach(t *testing.T) {
 	}
 }
 
-func TestRenderSurfaceListsWarningsOverWhatIsWorthALook(t *testing.T) {
+func TestRenderSurfaceListsWarningsOverNotices(t *testing.T) {
 	model := pie.Model{
 		Exports: []pie.Export{withV1alpha1(pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource()}})},
 		Schemas: []pie.Schema{widgetSchemaAt("pms/widgets.yaml")},
@@ -2071,7 +2103,7 @@ func TestRenderSurfaceListsWarningsOverWhatIsWorthALook(t *testing.T) {
 
 - APIExport core.example.io: apis.kcp.io/v1alpha1 is deprecated
 
-**Worth a look**
+**Notices**
 
 - WorkspaceType security binds no APIExport
 `
@@ -2080,7 +2112,7 @@ func TestRenderSurfaceListsWarningsOverWhatIsWorthALook(t *testing.T) {
 	}
 }
 
-func TestRenderSurfaceListsWhatIsWorthALookUnderTheTable(t *testing.T) {
+func TestRenderSurfaceListsNoticesUnderTheTable(t *testing.T) {
 	model := pie.Model{
 		Exports: []pie.Export{{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource()}}},
 		Schemas: []pie.Schema{widgetSchemaAt("pms/widgets.yaml")},
@@ -2093,7 +2125,7 @@ func TestRenderSurfaceListsWhatIsWorthALookUnderTheTable(t *testing.T) {
 |---|---|:-:|:-:|
 | **core.example.io** | Widget | ● |  |
 
-**Worth a look**
+**Notices**
 
 - WorkspaceType security binds no APIExport
 `
@@ -2137,24 +2169,54 @@ func TestRenderSurface(t *testing.T) {
 `,
 		},
 		{
-			name: "inherited bindings count, and an export outside the tree gets one row",
+			name: "an export APIBinding files bind from outside the tree gets one row, kcp's own in root saying so",
+			model: pie.Model{APIBindings: []pie.APIBinding{
+				{Path: "pms/tenancy.yaml", Doc: 1, Name: "tenancy", Export: pie.ExportRef{Path: "root", Name: "tenancy.kcp.io"}},
+				{Path: "pms/audit.yaml", Doc: 1, Name: "audit", Export: pie.ExportRef{Path: "root:audit", Name: "audit.example.io"}},
+			}},
+			want: `| APIExport | kind | APIBindings in<br/>pms |
+|---|---|:-:|
+| **tenancy.kcp.io** | (kcp) | ● |
+| **audit.example.io** | (outside the tree) | ● |
+`,
+		},
+		{
+			name: "inherited bindings count, and an export outside the tree gets one row, kcp's own in root saying so",
 			model: pie.Model{
 				Exports: []pie.Export{core},
 				Schemas: []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")},
 				WorkspaceTypes: []pie.WorkspaceType{
 					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: bindsInPMS("core.example.io"), Extends: []pie.TypeRef{{Name: "base"}}},
-					{Path: "types/base.yaml", Doc: 1, Name: "base", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}}},
+					{Path: "types/base.yaml", Doc: 1, Name: "base", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}, {Path: "root:audit", Name: "audit.example.io"}}},
 				},
 			},
 			want: `| APIExport | kind | account | base |
 |---|---|:-:|:-:|
 | **core.example.io** | Widget | ● |  |
 |  | Gadget | ● |  |
-| **tenancy.kcp.io** | (outside the tree) | ● | ● |
+| **tenancy.kcp.io** | (kcp) | ● | ● |
+| **audit.example.io** | (outside the tree) | ● | ● |
 
-**Worth a look**
+**Notices**
 
-- WorkspaceType base binds only APIExports from outside the tree: tenancy.kcp.io
+- WorkspaceType base binds only APIExports from outside the tree: tenancy.kcp.io (kcp), audit.example.io
+`,
+		},
+		{
+			name: "a type extending universal in root binds kcp's tenancy.kcp.io and topology.kcp.io",
+			model: pie.Model{
+				Exports: []pie.Export{core},
+				Schemas: []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")},
+				WorkspaceTypes: []pie.WorkspaceType{
+					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: bindsInPMS("core.example.io"), Extends: []pie.TypeRef{{Path: "root", Name: "universal"}}},
+				},
+			},
+			want: `| APIExport | kind | account |
+|---|---|:-:|
+| **core.example.io** | Widget | ● |
+|  | Gadget | ● |
+| **tenancy.kcp.io** | (kcp) | ● |
+| **topology.kcp.io** | (kcp) | ● |
 `,
 		},
 		{
@@ -2208,7 +2270,7 @@ func TestRenderSurfaceNamesTheGroupOfAKindThatIsNotTheExportsOwn(t *testing.T) {
 | **system.example.io** | Gadget · core.example.io | ● |
 |  | ledgers · billing.example.io · not in tree | ● |
 
-**Worth a look**
+**Notices**
 
 - APIExport core.example.io serves 2 API groups: core.example.io, ui.example.io
 - APIExport system.example.io serves 2 API groups: core.example.io, billing.example.io
@@ -2251,9 +2313,9 @@ func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 |  | grants: * on workspaces, apibindings | ● |
 |  | grants: get, create on selected secrets | ● |
 
-**Worth a look**
+**Notices**
 
-- APIExport core.example.io may write kcp's own resources where account binds it: * on workspaces, apibindings
+- APIExport core.example.io claims write on kcp's own resources where account binds it: * on workspaces, apibindings
 `,
 		},
 		{
@@ -2278,7 +2340,7 @@ func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 | **terminal.example.io** | (no kinds) |
 |  | grants: get on widgets from core.example.io, secrets,<br/>gadgets from core.example.io or spare.example.io |
 
-**Worth a look**
+**Notices**
 
 - API group core.example.io is served by 2 APIExports: core.example.io, spare.example.io
 - APIExport terminal.example.io claims widgets, gadgets from core.example.io
@@ -2307,9 +2369,9 @@ func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 |  | grants: * on workspaces | ● | ● | ●<br/>not workspaces |
 |  | grants: get on secrets, configmaps | ● | ●<br/>not configmaps | ●<br/>not secrets, configmaps |
 
-**Worth a look**
+**Notices**
 
-- APIExport core.example.io may write kcp's own resources where account and APIBindings in pms bind it: * on workspaces
+- APIExport core.example.io claims write on kcp's own resources where account and APIBindings in pms bind it: * on workspaces
 `,
 		},
 	}
@@ -2385,7 +2447,7 @@ grid-gap: 0
 "r3c2": "●" {height: 34}
 "r3c3": "●\nnot workspaces"
 "r4c0": "tenancy.kcp.io" {style.fill: "#f4f6fb"; style.bold: true; height: 34}
-"r4c1": "(outside the tree)" {style.fill: "#f4f6fb"; label.near: center-left; height: 34}
+"r4c1": "(kcp)" {style.fill: "#f4f6fb"; label.near: center-left; height: 34}
 "r4c2": "●" {style.fill: "#f4f6fb"; height: 34}
 "r4c3": "" {style.fill: "#f4f6fb"; height: 34}
 "legend": "grants that can write: a verb other than get, list, watch" {near: bottom-center; style.fill: "#e5dbff"; height: 34}
@@ -2904,7 +2966,7 @@ changed: notice: API group core.example.io is served by 3 APIExports: core.examp
 				{Path: "types/lonely.yaml", Doc: 1, Name: "lonely", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}}},
 			}},
 			want: `added: binding of tenancy.kcp.io by WorkspaceType lonely, for new workspaces only
-changed: notice: WorkspaceType lonely binds only APIExports from outside the tree: tenancy.kcp.io
+changed: notice: WorkspaceType lonely binds only kcp's APIExports: tenancy.kcp.io
 `,
 		},
 		{
@@ -2934,13 +2996,13 @@ changed: notice: APIExports a.example.io and b.example.io both claim secrets, co
 `,
 		},
 		{
-			name: "an export that may write kcp's own resources in more places has changed",
+			name: "an export that claims write on kcp's own resources in more places has changed",
 			a: pie.Model{Exports: []pie.Export{export("a.example.io", nil, pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}})},
 				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "a.example.io")}},
 			b: pie.Model{Exports: []pie.Export{export("a.example.io", nil, pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}})},
 				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "a.example.io"), typeBinding("org", "a.example.io")}},
 			want: `added: WorkspaceType org, binding a.example.io
-changed: notice: APIExport a.example.io may write kcp's own resources where account and org bind it: * on workspaces
+changed: notice: APIExport a.example.io claims write on kcp's own resources where account and org bind it: * on workspaces
 `,
 		},
 		{
@@ -3001,7 +3063,7 @@ added: notice: APIExports a.example.io and c.example.io both claim configmaps wh
 `,
 		},
 		{
-			name: "about different exports: one that may write kcp's own resources",
+			name: "about different exports: one that claims write on kcp's own resources",
 			a: pie.Model{
 				Exports:        []pie.Export{export("a.example.io", nil, pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}}), export("b.example.io", nil)},
 				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "a.example.io", "b.example.io")},
@@ -3014,7 +3076,7 @@ added: notice: APIExports a.example.io and c.example.io both claim configmaps wh
 				WorkspaceTypes: []pie.WorkspaceType{typeBinding("account", "a.example.io", "b.example.io")},
 			},
 			want: `added: claim by b.example.io on logicalclusters.core.kcp.io: update
-added: notice: APIExport b.example.io may write kcp's own resources where account binds it: update on logicalclusters
+added: notice: APIExport b.example.io claims write on kcp's own resources where account binds it: update on logicalclusters
 `,
 		},
 		{
@@ -3195,7 +3257,7 @@ func TestRenderOverviewDiffD2SaysWhatWorkspacesATypeAlreadyHasGet(t *testing.T) 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := string(pie.RenderOverviewDiffD2(tt.a, tt.b))
-			if want := fmt.Sprintf("\"story\": %q {class: story;", tt.want+"\n☐ maximal permission policy"); !strings.Contains(got, want) {
+			if want := fmt.Sprintf("\"story\": %q {class: story;", tt.want+"\nmaximalPermissionPolicy: none"); !strings.Contains(got, want) {
 				t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, want)
 			}
 		})
@@ -3256,7 +3318,7 @@ func TestRenderOverviewDiffD2SaysWhatAnExportKeepsServingToItsBindings(t *testin
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := string(pie.RenderOverviewDiffD2(tt.a, tt.b))
-			if want := fmt.Sprintf("\"story\": %q {class: story;", tt.want+"\n☐ maximal permission policy"); !strings.Contains(got, want) {
+			if want := fmt.Sprintf("\"story\": %q {class: story;", tt.want+"\nmaximalPermissionPolicy: none"); !strings.Contains(got, want) {
 				t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, want)
 			}
 		})
@@ -3474,10 +3536,10 @@ func TestRenderD2ExplainsTheRelationsItDraws(t *testing.T) {
 "outside": {
   label: "APIExports outside the tree"
   style.stroke-dash: 3
-  "tenancy.kcp.io @ root"
+  "tenancy.kcp.io @ root (kcp)"
 }
-"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"; style.stroke-dash: 2}
-"workspacetype:types/base.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
+"workspacetype:types/account.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root (kcp)" {style.stroke: "#1971c2"; style.stroke-dash: 2}
+"workspacetype:types/base.yaml#1"."tenancy.kcp.io" -> "outside"."tenancy.kcp.io @ root (kcp)" {style.stroke: "#1971c2"}
 ` + legend(legendBindsByDefault, legendBindsThroughExtend),
 		},
 	}
@@ -3701,8 +3763,6 @@ classes: {
   story: {style: {fill: transparent; stroke: transparent; font-size: 13; bold: false; font-color: "#343a40"}}
   warning: {style: {fill: transparent; stroke: transparent; font-size: 13; bold: true; font-color: "#e8590c"}}
   workspace: {style: {fill: "#f8f9fa"; stroke: "#868e96"; font-size: 15; border-radius: 8}}
-  outside: {style: {fill: transparent; stroke: "#868e96"; stroke-dash: 3; font-size: 14}}
-  outside-export: {style: {fill: "#f8f9fa"; stroke: "#868e96"; stroke-dash: 3; font-size: 14; border-radius: 6}}
   workspacetype: {style: {fill: "#e7f5ff"; stroke: "#1971c2"; font-size: 15; border-radius: 6}}
   apibindings: {style: {fill: "#ebfbee"; stroke: "#2f9e44"; font-size: 15; border-radius: 6}}
   claimed: {style: {fill: transparent; stroke: "#adb5bd"; stroke-dash: 3; font-size: 15; border-radius: 6}}
@@ -3766,7 +3826,7 @@ func TestRenderOverviewD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 `,
@@ -3787,7 +3847,7 @@ func TestRenderOverviewD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -3830,21 +3890,21 @@ func TestRenderOverviewD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
   "apiexport:pms/other.yaml#1": {
     label: "other.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account, org\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account, org\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
   "apiexport:pms/lone.yaml#1": {
     label: "lone.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 "consumers": {
@@ -3861,7 +3921,7 @@ func TestRenderOverviewD2(t *testing.T) {
 ` + overviewLegend(legendBindsByDefault, legendServes, legendClaimsRead, legendAPIGroup),
 		},
 		{
-			name: "an export's box says where it is bound, each consumer once: a WorkspaceType by its name, a directory of APIBinding files by the shortest end of its path no other such directory shares",
+			name: "an export's box says where it is bound, each consumer once: a WorkspaceType by its name, a directory of APIBinding files by the shortest end of its path no other such directory shares, as its own box says it",
 			model: pie.Model{
 				Exports: []pie.Export{{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io"}},
 				WorkspaceTypes: []pie.WorkspaceType{
@@ -3885,7 +3945,7 @@ func TestRenderOverviewD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account, a/manifests, b/manifests, c/kcp, kcp, tools\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account, a/manifests, b/manifests, c/kcp, kcp, tools\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -3897,7 +3957,7 @@ func TestRenderOverviewD2(t *testing.T) {
   "apibindings:b/manifests": "APIBindings in b/manifests" {class: apibindings}
   "apibindings:c/kcp": "APIBindings in c/kcp" {class: apibindings}
   "apibindings:kcp": "APIBindings in kcp" {class: apibindings}
-  "apibindings:d/e/tools": "APIBindings in d/e/tools" {class: apibindings}
+  "apibindings:d/e/tools": "APIBindings in tools" {class: apibindings}
 }
 "consumers"."workspacetype:types/a.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
 "consumers"."workspacetype:types/b.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
@@ -3927,14 +3987,14 @@ func TestRenderOverviewD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account, 01\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account, 01\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
 }
 "consumers": {
   label: "CONSUMERS"
   class: column
   "workspacetype:types/account.yaml#1": "account\nextends security" {class: workspacetype}
-  "apibindings:kcp/01": "APIBindings in kcp/01" {class: apibindings}
+  "apibindings:kcp/01": "APIBindings in 01" {class: apibindings}
 }
 "consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"; style.stroke-dash: 2}
 "consumers"."apibindings:kcp/01" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#2f9e44"}
@@ -3974,28 +4034,28 @@ func TestRenderOverviewD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:ws/b.yaml#1": {
     label: "b.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:ws/c.yaml#1": {
     label: "c.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:ws/d.yaml#1": {
     label: "d.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -4043,14 +4103,14 @@ func TestRenderOverviewD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:ws/b.yaml#1": {
     label: "b.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -4067,33 +4127,40 @@ func TestRenderOverviewD2(t *testing.T) {
 ` + overviewLegend(legendBindsRefused, legendServes, legendAPIGroup, legendSharedKind),
 		},
 		{
-			name: "an export outside the tree is drawn once, in a dashed box among the exports",
+			name: "exports outside the tree are a line on each consumer binding them, by workspace, not boxes with arrows; one bound through a base says so",
 			model: pie.Model{
 				WorkspaceTypes: []pie.WorkspaceType{
-					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}, {Name: "local.example.io"}}},
-					{Path: "types/org.yaml", Doc: 1, Name: "org", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}}},
+					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}, {Name: "local.example.io"}, {Path: "root", Name: "topology.kcp.io"}}},
+					{Path: "types/org.yaml", Doc: 1, Name: "org", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}},
+						Extends: []pie.TypeRef{{Path: "root", Name: "base"}}},
+					{Path: "types/base.yaml", Doc: 1, Name: "base", Binds: []pie.ExportRef{{Path: "root:kcp", Name: "shards.kcp.io"}}},
 				},
+				APIBindings: []pie.APIBinding{{Path: "x/tenancy.yaml", Doc: 1, Name: "tenancy", Export: pie.ExportRef{Path: "root", Name: "tenancy.kcp.io"}}},
 			},
-			want: `"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "outside": {
-    label: "outside the tree"
-    class: outside
-    "tenancy.kcp.io @ root": {class: outside-export}
-    "local.example.io @ (own workspace)": {class: outside-export}
-  }
-}
-"consumers": {
+			want: `"consumers": {
   label: "CONSUMERS"
   class: column
-  "workspacetype:types/account.yaml#1": "account" {class: workspacetype}
-  "workspacetype:types/org.yaml#1": "org" {class: workspacetype}
+  "workspacetype:types/account.yaml#1": "account\nbinds tenancy.kcp.io, topology.kcp.io @ root (kcp)\nbinds local.example.io @ (own workspace) (not in tree)" {class: workspacetype}
+  "workspacetype:types/org.yaml#1": "org\nextends base\nbinds tenancy.kcp.io @ root (kcp)\nbinds shards.kcp.io @ root:kcp (not in tree, through base)" {class: workspacetype}
+  "apibindings:x": "APIBindings in x\nbinds tenancy.kcp.io @ root (kcp)" {class: apibindings}
 }
-"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
-"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."outside"."local.example.io @ (own workspace)" {style.stroke: "#1971c2"}
-"consumers"."workspacetype:types/org.yaml#1" -> "apiexports"."outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
-` + overviewLegend(legendBindsByDefault),
+`,
+		},
+		{
+			name: "kcp's own APIExports in root say kcp, the same names in another workspace do not",
+			model: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{
+					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{
+						{Path: "root", Name: "shards.core.kcp.io"}, {Path: "root:org", Name: "tenancy.kcp.io"}, {Path: "root", Name: "cache.kcp.io"},
+						{Path: "root", Name: "local.example.io"}, {Path: "root", Name: "migration.kcp.io"}}},
+				},
+			},
+			want: `"consumers": {
+  label: "CONSUMERS"
+  class: column
+  "workspacetype:types/account.yaml#1": "account\nbinds shards.core.kcp.io, cache.kcp.io, migration.kcp.io @ root (kcp)\nbinds tenancy.kcp.io @ root:org; local.example.io @ root (not in tree)" {class: workspacetype}
+}
+`,
 		},
 		{
 			name: "copies of an export or a WorkspaceType say where they are written, and a binding points at every copy",
@@ -4116,14 +4183,14 @@ func TestRenderOverviewD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:b/export.yaml#1": {
     label: "core.example.io · b/export.yaml#1"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -4185,7 +4252,7 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
@@ -4224,14 +4291,14 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
   "apiexport:ws/ui.yaml#1": {
     label: "ui.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
@@ -4265,7 +4332,7 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
@@ -4295,14 +4362,14 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
   "apiexport:b/export.yaml#1": {
     label: "core.example.io · b/export.yaml#1"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 "apiexports"."apiexport:a/export.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
@@ -4335,14 +4402,14 @@ func TestRenderOverviewD2SaysWhatAnExportLeavesOpen(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "an export without a maximal permission policy says so, bound or not",
+			name:  "an export without a maximal permission policy says none, bound or not",
 			model: pie.Model{Exports: []pie.Export{core}},
-			want:  "☐ maximal permission policy",
+			want:  "maximalPermissionPolicy: none",
 		},
 		{
 			name:  "an export with one names its kind",
 			model: pie.Model{Exports: []pie.Export{withPolicy(core)}},
-			want:  "☑ maximal permission policy · local",
+			want:  "maximalPermissionPolicy: local",
 		},
 		{
 			name: "the policy comes after where an export is bound and what it needs",
@@ -4351,7 +4418,7 @@ func TestRenderOverviewD2SaysWhatAnExportLeavesOpen(t *testing.T) {
 				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account",
 					Binds: []pie.ExportRef{{Path: "root:pms", Name: "terminal.example.io"}}}},
 			},
-			want: "bound at account\nall verbs on widgets from core.example.io\n☑ maximal permission policy · local",
+			want: "bound at account\nall verbs on widgets from core.example.io\nmaximalPermissionPolicy: local",
 		},
 	}
 	for _, tt := range tests {
@@ -4380,7 +4447,7 @@ func TestRenderOverviewD2WarnsOnTheExportBox(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
     "warnings": "! apis.kcp.io/v1alpha1 is deprecated; claims get verbs *" {class: warning; height: 17}
   }
 `,
@@ -4400,7 +4467,7 @@ func TestRenderOverviewD2WarnsOnTheExportBox(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
     "warnings": "! apis.kcp.io/v1alpha1 is deprecated" {class: warning; height: 17}
   }
 `,
@@ -4432,6 +4499,28 @@ func TestRenderOverviewD2WarnsOnTheExportBox(t *testing.T) {
 	}
 }
 
+func TestRenderOverviewDiffD2NamesExportsOutsideTheTreeOnAConsumerWithTags(t *testing.T) {
+	core := func(resources ...pie.Resource) pie.Export {
+		return pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: resources}
+	}
+	account := pie.WorkspaceType{Path: "types/account.yaml", Doc: 1, Name: "account",
+		Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}, {Path: "root", Name: "tenancy.kcp.io"}}}
+	anchors := pie.Resource{Group: "core.example.io", Name: "anchors"}
+	sprockets := pie.Resource{Group: "core.example.io", Name: "sprockets"}
+	a := pie.Model{Exports: []pie.Export{core(widgetResource(), gadgetResource(), anchors, sprockets)}, Schemas: []pie.Schema{gadgetSchemaAt("pms/gadgets.yaml")}, WorkspaceTypes: []pie.WorkspaceType{account}}
+	b := pie.Model{Exports: []pie.Export{core(widgetResource())}, Schemas: []pie.Schema{gadgetSchemaAt("pms/gadgets.yaml")}, WorkspaceTypes: []pie.WorkspaceType{account}}
+	want := `  "workspacetype:account": {
+    label: "account\nbinds tenancy.kcp.io @ root (kcp)"
+    class: workspacetype
+    style.bold: true
+    grid-columns: 1
+    grid-gap: 4
+    "lost": "had in A: Gadget, anchors, sprockets" {`
+	if got := string(pie.RenderOverviewDiffD2(a, b)); !strings.Contains(got, want) {
+		t.Errorf("RenderOverviewDiffD2() =\n%s\nwant it to hold\n%s", got, want)
+	}
+}
+
 func TestRenderOverviewDiffD2MarksWhatAnExportLeavesOpenAsItChanges(t *testing.T) {
 	core := coreExportAt("pms/core.yaml")
 	tests := []struct {
@@ -4447,7 +4536,7 @@ func TestRenderOverviewDiffD2MarksWhatAnExportLeavesOpenAsItChanges(t *testing.T
 				e.MaximalPermissionPolicy = "local"
 				return e
 			}()}},
-			want: "+☑ maximal permission policy · local\n−☐ maximal permission policy",
+			want: "+maximalPermissionPolicy: local\n−maximalPermissionPolicy: none",
 		},
 	}
 	warnings := []struct {
@@ -4523,21 +4612,21 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
   "apiexport:ws/reader.yaml#1": {
     label: "reader.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "reads widgets from core.example.io\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "reads widgets from core.example.io\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
   "apiexport:ws/admin.yaml#1": {
     label: "admin.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "all verbs on widgets, gadgets from core.example.io\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "all verbs on widgets, gadgets from core.example.io\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
@@ -4582,14 +4671,14 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
   "apiexport:ws/terminal.yaml#1": {
     label: "terminal.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "reads widgets from core.example.io\nwrites gadgets from core.example.io\n☐ maximal permission policy" {class: story; height: 51}
+    "story": "reads widgets from core.example.io\nwrites gadgets from core.example.io\nmaximalPermissionPolicy: none" {class: story; height: 51}
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
@@ -4632,7 +4721,7 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
@@ -4706,14 +4795,14 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
   "apiexport:ws/other.yaml#1": {
     label: "other.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."exported" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
@@ -4765,14 +4854,14 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
   "apiexport:ws/providers.yaml#1": {
     label: "providers.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · selected" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
@@ -4806,14 +4895,14 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
   "apiexport:ws/other.yaml#1": {
     label: "other.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 "apiexports"."apiexport:ws/gateway.yaml#1" -> "resources"."group:gateway.networking.k8s.io"."gateways.gateway.networking.k8s.io" {style.stroke: "#868e96"}
@@ -4847,14 +4936,14 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
   "apiexport:ws/other.yaml#1": {
     label: "other.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
@@ -4927,7 +5016,7 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 			name: "a type others extend stays a consumer when the tree has a workspace of it, or puts it in or over another type",
 			model: pie.Model{
 				WorkspaceTypes: []pie.WorkspaceType{
-					typ("account", nil, nil, "base", "mixin", "hub", "universal"),
+					typ("account", nil, nil, "base", "mixin", "hub", "shared"),
 					typ("base", nil, nil),
 					typ("mixin", nil, nil),
 					typ("holder", nil, []string{"mixin"}),
@@ -4937,7 +5026,7 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 				Workspaces: []pie.Workspace{{Path: "ws/b.yaml", Doc: 1, Name: "b", Type: pie.TypeRef{Path: "root", Name: "base"}}},
 			},
 			want: column(
-				consumer("account", "account\nextends base, mixin, hub, universal (not in tree)"),
+				consumer("account", "account\nextends base, mixin, hub, shared (not in tree)"),
 				consumer("base", "base\nworkspace b"),
 				consumer("holder", "holder"),
 				consumer("mixin", "holder › mixin"),
@@ -4956,7 +5045,7 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 					withLifecycle(typ("gate", nil, nil), true, false),
 					withLifecycle(typ("init", nil, nil), true, false),
 					withLifecycle(typ("term", nil, nil), false, true),
-					typ("mixed", nil, nil, "init", "term", "universal"),
+					typ("mixed", nil, nil, "init", "term", "shared"),
 				},
 				Workspaces: []pie.Workspace{
 					{Path: "ws/orgs.yaml", Doc: 1, Name: "orgs", Type: pie.TypeRef{Path: "root", Name: "orgs"}},
@@ -4966,10 +5055,41 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 			},
 			want: column(
 				consumer("orgs", "orgs\nworkspace orgs"),
-				consumer("org", "orgs › org\nextends security\ninitialized and terminated by security"),
-				consumer("account", "orgs › org › account\nextends org\ninitialized and terminated by security\nworkspaces a1, a2"),
-				consumer("gate", "gate\ninitialized by gate"),
-				consumer("mixed", "mixed\nextends init, term, universal (not in tree)\ninitialized by init\nterminated by term"),
+				consumer("org", "orgs › org\nextends security\ninitializers, terminators: root:security"),
+				consumer("account", "orgs › org › account\nextends org\ninitializers, terminators: root:security\nworkspaces a1, a2"),
+				consumer("gate", "gate\ninitializers: gate"),
+				consumer("mixed", "mixed\nextends init, term, shared (not in tree)\ninitializers: root:init\nterminators: root:term"),
+			),
+		},
+		{
+			name: "a type extending universal in root, which kcp creates in every installation, binds tenancy.kcp.io and topology.kcp.io through it, each once; universal's initializer is kcp's own",
+			model: pie.Model{WorkspaceTypes: []pie.WorkspaceType{
+				typ("orgs", nil, nil, "universal"),
+				func() pie.WorkspaceType {
+					wt := withLifecycle(typ("account", nil, nil, "universal"), true, true)
+					wt.Binds = []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}}
+					return wt
+				}(),
+				{Path: "types/local.yaml", Doc: 1, Name: "local", Extends: []pie.TypeRef{{Path: "root:elsewhere", Name: "universal"}}},
+			}},
+			want: column(
+				consumer("orgs", "orgs\nextends universal (kcp)\nbinds tenancy.kcp.io, topology.kcp.io @ root (kcp, through universal)"),
+				consumer("account", "account\nextends universal (kcp)\ninitializers, terminators: account\nbinds tenancy.kcp.io @ root (kcp)\nbinds topology.kcp.io @ root (kcp, through universal)"),
+				consumer("local", "local\nextends universal (not in tree)"),
+			),
+		},
+		{
+			name: "a tree that has a type named universal is drawn from its own",
+			model: pie.Model{WorkspaceTypes: []pie.WorkspaceType{
+				typ("orgs", nil, nil, "universal"),
+				func() pie.WorkspaceType {
+					wt := typ("universal", nil, nil)
+					wt.Binds = []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}}
+					return wt
+				}(),
+			}},
+			want: column(
+				consumer("orgs", "orgs\nextends universal\nbinds tenancy.kcp.io @ root (kcp, through universal)"),
 			),
 		},
 		{
@@ -4979,8 +5099,24 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 				typ("b", nil, nil, "a"),
 			}},
 			want: column(
-				consumer("a", "a\nextends b\ninitialized by a"),
-				consumer("b", "a › b\nextends a\ninitialized by a"),
+				consumer("a", "a\nextends b\ninitializers: a"),
+				consumer("b", "a › b\nextends a\ninitializers: root:a"),
+			),
+		},
+		{
+			name: "an initializer is named as kcp names it, root:type, where the references place its type in root",
+			model: pie.Model{WorkspaceTypes: []pie.WorkspaceType{
+				{Path: "types/team.yaml", Doc: 1, Name: "team", Extends: []pie.TypeRef{{Path: "root:org", Name: "gatekeeper"}}},
+				{Path: "types/unit.yaml", Doc: 1, Name: "unit", Extends: []pie.TypeRef{{Name: "keeper"}}},
+				{Path: "types/dept.yaml", Doc: 1, Name: "dept", Extends: []pie.TypeRef{{Path: "root", Name: "mid"}}},
+				{Path: "types/mid.yaml", Doc: 1, Name: "mid", Extends: []pie.TypeRef{{Name: "keeper"}, {Path: "root:org", Name: "gatekeeper"}}},
+				withLifecycle(typ("gatekeeper", nil, nil), true, false),
+				withLifecycle(typ("keeper", nil, nil), true, false),
+			}},
+			want: column(
+				consumer("team", "team\nextends gatekeeper\ninitializers: gatekeeper"),
+				consumer("unit", "unit\nextends keeper\ninitializers: keeper"),
+				consumer("dept", "dept\nextends mid\ninitializers: root:keeper, gatekeeper"),
 			),
 		},
 		{
@@ -5073,7 +5209,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -5108,7 +5244,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\nexisting workspaces keep gadgets\n☐ maximal permission policy" {class: story; height: 51}
+    "story": "bound at account\nexisting workspaces keep gadgets\nmaximalPermissionPolicy: none" {class: story; height: 51}
   }
   "workspace:root:pms"."apiexport:other.example.io": {
     label: "other.example.io"
@@ -5117,7 +5253,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     style.fill: "#e3fafc"
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account (new workspaces only)\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account (new workspaces only)\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -5165,7 +5301,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:old.example.io": {
     label: "old.example.io"
@@ -5174,7 +5310,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     style.fill: "#f8f0fc"
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at org\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at org\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -5208,14 +5344,14 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
   "apiexport:reader.example.io": {
     label: "reader.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "+writes widgets from core.example.io\n−reads widgets from core.example.io\n☐ maximal permission policy" {class: story; height: 51}
+    "story": "+writes widgets from core.example.io\n−reads widgets from core.example.io\nmaximalPermissionPolicy: none" {class: story; height: 51}
   }
 }
 "apiexports"."apiexport:core.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
@@ -5246,7 +5382,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
   "workspace:root:pms"."apiexport:b.example.io": {
     label: "b.example.io"
@@ -5255,7 +5391,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     style.fill: "#e3fafc"
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account (new workspaces only)\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account (new workspaces only)\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -5294,7 +5430,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
   "apiexport:other.example.io": {
     label: "other.example.io"
@@ -5303,7 +5439,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     style.fill: "#e3fafc"
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 "consumers": {
@@ -5348,14 +5484,14 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
   "apiexport:reader.example.io": {
     label: "reader.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "☐ maximal permission policy" {class: story; height: 17}
+    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
 "apiexports"."apiexport:core.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
@@ -5363,29 +5499,17 @@ func TestRenderOverviewDiffD2(t *testing.T) {
 ` + overviewLegend(legendServes, legendClaimsRead, legendAPIGroup, legendOnlyInB),
 		},
 		{
-			name: "an export from outside the tree that only B binds is cyan, with its arrow",
+			name: "an export from outside the tree that a consumer of both trees binds only in B is marked +, one only in A − at the end, in its line",
 			a: pie.Model{WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account",
-				Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}}}}},
+				Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}, {Path: "root", Name: "gone.kcp.io"}}}}},
 			b: pie.Model{WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account",
 				Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}, {Path: "root", Name: "topology.kcp.io"}}}}},
-			want: `"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "outside": {
-    label: "outside the tree"
-    class: outside
-    "tenancy.kcp.io @ root": {class: outside-export}
-    "topology.kcp.io @ root": {class: outside-export; style.stroke: "#1098ad"; style.fill: "#e3fafc"}
-  }
-}
-"consumers": {
+			want: `"consumers": {
   label: "CONSUMERS"
   class: column
-  "workspacetype:account": "account" {class: workspacetype}
+  "workspacetype:account": "account\nbinds tenancy.kcp.io, +topology.kcp.io @ root (kcp)\nbinds −gone.kcp.io @ root (not in tree)" {class: workspacetype}
 }
-"consumers"."workspacetype:account" -> "apiexports"."outside"."tenancy.kcp.io @ root" {style.stroke: "#1971c2"}
-"consumers"."workspacetype:account" -> "apiexports"."outside"."topology.kcp.io @ root" {style.stroke: "#1098ad"}
-` + overviewLegend(legendBindsByDefault, legendOnlyInB),
+`,
 		},
 		{
 			name: "a consumer both trees have whose kinds change, those the exports it binds serve and not what they claim, keeps its look and gets a dashed tag of the kinds it had in A, grape, and one of those it got in B, cyan, by name and wrapped to about its title's width; a consumer only B has is filled cyan, without tags",
@@ -5433,7 +5557,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account, org, y, −guest (existing workspaces keep it)\nexisting workspaces keep anchors, gadgets\n☐ maximal permission policy" {class: story; height: 51}
+    "story": "bound at account, org, y, −guest (existing workspaces keep it)\nexisting workspaces keep anchors, gadgets\nmaximalPermissionPolicy: none" {class: story; height: 51}
   }
   "workspace:root:pms"."apiexport:tools.example.io": {
     label: "tools.example.io"
@@ -5442,7 +5566,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     style.fill: "#e3fafc"
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at org (new workspaces only), guest (new workspaces only), team\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at org (new workspaces only), guest (new workspaces only), team\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
 }
 "consumers": {
@@ -5451,8 +5575,8 @@ func TestRenderOverviewDiffD2(t *testing.T) {
 ` + changed("workspacetype:account", "account", "workspacetype", lost("had in A: anchors,\ngadgets"), got("got in B: bolts,\nsprockets")) +
 				changed("workspacetype:org", "org", "workspacetype", got("got in B: bolts,\nsprockets")) +
 				changed("workspacetype:guest", "guest", "workspacetype", lost("had in A: Widget")) + `  "workspacetype:team": "team" {class: workspacetype; style.stroke: "#1098ad"; style.fill: "#e3fafc"}
-` + changed("apibindings:x/y", "APIBindings in x/y", "apibindings",
-				lost("had in A: anchors, gadgets"), got("got in B: bolts, sprockets")) + `}
+` + changed("apibindings:x/y", "APIBindings in y", "apibindings",
+				lost("had in A: anchors,\ngadgets"), got("got in B: bolts,\nsprockets")) + `}
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."sprockets.core.example.io" {style.stroke: "#1098ad"}
 "apiexports"."workspace:root:pms"."apiexport:core.example.io" -> "resources"."group:core.example.io"."bolts.core.example.io" {style.stroke: "#1098ad"}
@@ -5501,14 +5625,14 @@ func TestRenderOverviewDiffD2(t *testing.T) {
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "bound at account, +team, a/bind, +b/bind, −org\n☐ maximal permission policy" {class: story; height: 34}
+    "story": "bound at account, +team, a/bind, +b/bind, −org\nmaximalPermissionPolicy: none" {class: story; height: 34}
   }
   "apiexport:reader.example.io": {
     label: "reader.example.io"
     class: export
     grid-columns: 1
     grid-gap: 0
-    "story": "+writes widgets from core.example.io\n−reads widgets from core.example.io\n☐ maximal permission policy" {class: story; height: 51}
+    "story": "+writes widgets from core.example.io\n−reads widgets from core.example.io\nmaximalPermissionPolicy: none" {class: story; height: 51}
   }
 }
 "consumers": {

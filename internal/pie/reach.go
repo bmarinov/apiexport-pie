@@ -7,8 +7,8 @@ import (
 )
 
 // reachNotices points out where claims reach: two exports bound together that claim the same
-// resources, an export that may write kcp's own resources, a claim on what another export serves, and
-// one that writes out the identity hash of an export whose identity kcp generates.
+// resources, an export that claims write on kcp's own resources, a claim on what another export
+// serves, and one that writes out the identity hash of an export whose identity kcp generates.
 func reachNotices(m Model, exports []Export) []finding {
 	var diags []finding
 	note := func(about, path string, doc int, format string, args ...any) {
@@ -71,7 +71,7 @@ func reachNotices(m Model, exports []Export) []finding {
 			}
 			writes = append(writes, set.verbs+" on "+strings.Join(resources, ", "))
 		}
-		note("kcp writes of "+e.Name, e.Path, e.Doc, "APIExport %s may write kcp's own resources where %s it: %s", e.Name, binds(where), strings.Join(writes, "; "))
+		note("kcp writes of "+e.Name, e.Path, e.Doc, "APIExport %s claims write on kcp's own resources where %s it: %s", e.Name, binds(where), strings.Join(writes, "; "))
 	}
 
 	serving := exportsServing(exports)

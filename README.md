@@ -11,8 +11,6 @@ each export's provider may do there through its claims.
 `--diff` compares two versions of a tree: a PR branch against main, or one release tag against the
 next.
 
-For the output types in detail and the kcp concepts behind them, see [MANUAL.md](MANUAL.md).
-
 ## Install
 
 ```sh

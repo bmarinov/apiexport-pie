@@ -76,6 +76,9 @@ func RenderD2(m Model) []byte {
 		}
 		if len(targets) == 0 {
 			box := ref.Name + " @ " + workspaceOf(ref)
+			if isKcpExport(ref) {
+				box += " (kcp)"
+			}
 			if !slices.Contains(outside, box) {
 				outside = append(outside, box)
 			}
@@ -273,12 +276,16 @@ func typeLabel(t WorkspaceType, repeated bool, types []WorkspaceType, workspaces
 	return label
 }
 
-// baseNames names the types t extends, those not in the tree marked so.
+// baseNames names the types t extends, marking kcp's universal and those not in the tree.
 func baseNames(t WorkspaceType, types []WorkspaceType) string {
 	bases := make([]string, 0, len(t.Extends))
 	for _, base := range t.Extends {
 		name := base.Name
-		if _, ok := typeNamed(base.Name, types); !ok {
+		_, inTree := typeNamed(base.Name, types)
+		switch {
+		case !inTree && base == universalRef:
+			name += " (kcp)"
+		case !inTree:
 			name += " (not in tree)"
 		}
 		bases = append(bases, name)

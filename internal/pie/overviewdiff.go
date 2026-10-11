@@ -117,7 +117,6 @@ func (o overview) draws(p presence) bool {
 		}
 	}
 	return slices.ContainsFunc(o.exports, func(e exportBox) bool { return e.in == p }) ||
-		slices.ContainsFunc(o.outside, func(x outsideBox) bool { return x.in == p }) ||
 		slices.ContainsFunc(o.consumers, func(x consumerBox) bool { return x.in == p }) ||
 		slices.ContainsFunc(o.edges, func(e overviewEdge) bool { return e.in == p })
 }
@@ -228,11 +227,13 @@ func diffOverviews(a, b overview) overview {
 		}
 	}
 
-	u.outside = merge(a.outside, b.outside, func(x outsideBox) string { return x.name }, func(x *outsideBox, p presence) { x.in = p })
 	u.consumers = merge(a.consumers, b.consumers, func(x consumerBox) string { return x.id }, func(x *consumerBox, p presence) { x.in = p })
 	kindsInA, kindsInB := a.kindsAt(), b.kindsAt()
 	for i, p := range u.consumers {
 		if p.in == inBoth {
+			inA := a.consumers[slices.IndexFunc(a.consumers, func(x consumerBox) bool { return x.id == p.id })]
+			u.consumers[i].outside = merge(inA.outside, p.outside, func(r outsideRef) outsideRef { return r },
+				func(r *outsideRef, in presence) { r.name = presenceSigns[in] + r.name })
 			if lost, got := kindsChange(names, kindsInA[p.id], kindsInB[p.id]); len(lost)+len(got) > 0 {
 				u.consumers[i].changed = map[presence][]string{onlyInA: lost, onlyInB: got}
 			}
