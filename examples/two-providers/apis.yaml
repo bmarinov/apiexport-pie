@@ -1,0 +1,59 @@
+# Two providers and two workspaces
+apiVersion: apis.kcp.io/v1alpha2
+kind: APIExport
+metadata: {name: databases.example.io}
+spec:
+  resources:
+  - {group: databases.example.io, name: databases, schema: v1.databases.databases.example.io, storage: {crd: {}}}
+  - {group: databases.example.io, name: backups, schema: v1.backups.databases.example.io, storage: {crd: {}}}
+  permissionClaims:
+  - group: ""
+    resource: secrets
+    verbs: [get, create, update, delete]
+    defaultSelector: {labelSelector: {matchLabels: {databases.example.io/connection: "true"}}}
+  - {group: "", resource: namespaces, verbs: [get, list, watch]}
+---
+apiVersion: apis.kcp.io/v1alpha2
+kind: APIExport
+metadata: {name: monitoring.example.io}
+spec:
+  resources:
+  - {group: monitoring.example.io, name: dashboards, schema: v1.dashboards.monitoring.example.io, storage: {crd: {}}}
+  - {group: monitoring.example.io, name: alertrules, schema: v1.alertrules.monitoring.example.io, storage: {crd: {}}}
+  permissionClaims:
+  - {group: "", resource: configmaps, verbs: ["*"]}
+---
+apiVersion: apis.kcp.io/v1alpha1
+kind: APIResourceSchema
+metadata: {name: v1.databases.databases.example.io}
+spec: {group: databases.example.io, names: {kind: Database, plural: databases}, scope: Namespaced}
+---
+apiVersion: apis.kcp.io/v1alpha1
+kind: APIResourceSchema
+metadata: {name: v1.backups.databases.example.io}
+spec: {group: databases.example.io, names: {kind: Backup, plural: backups}, scope: Namespaced}
+---
+apiVersion: apis.kcp.io/v1alpha1
+kind: APIResourceSchema
+metadata: {name: v1.dashboards.monitoring.example.io}
+spec: {group: monitoring.example.io, names: {kind: Dashboard, plural: dashboards}, scope: Namespaced}
+---
+apiVersion: apis.kcp.io/v1alpha1
+kind: APIResourceSchema
+metadata: {name: v1.alertrules.monitoring.example.io}
+spec: {group: monitoring.example.io, names: {kind: AlertRule, plural: alertrules}, scope: Namespaced}
+---
+apiVersion: tenancy.kcp.io/v1alpha1
+kind: WorkspaceType
+metadata: {name: team}
+spec:
+  defaultAPIBindings:
+  - {path: "root:services", export: databases.example.io}
+  - {path: "root:services", export: monitoring.example.io}
+---
+apiVersion: tenancy.kcp.io/v1alpha1
+kind: WorkspaceType
+metadata: {name: sandbox}
+spec:
+  defaultAPIBindings:
+  - {path: "root:services", export: databases.example.io}
