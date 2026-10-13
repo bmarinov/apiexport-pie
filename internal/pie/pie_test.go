@@ -891,11 +891,11 @@ func TestRenderD2DrawsConsumers(t *testing.T) {
 			},
 			want: `"workspacetype:types/orgs.yaml#1": {
   shape: sql_table
-  label: "WorkspaceType orgs · extends shared (not in tree) · workspace orgs"
+  label: "WorkspaceType orgs · extends shared (not in tree) · workspace: orgs"
 }
 "workspacetype:types/account.yaml#1": {
   shape: sql_table
-  label: "WorkspaceType account · workspaces a, b"
+  label: "WorkspaceType account · workspaces: a, b"
 }
 `,
 		},
@@ -5027,7 +5027,7 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 			},
 			want: column(
 				consumer("account", "account\nextends base, mixin, hub, shared (not in tree)"),
-				consumer("base", "base\nworkspace b"),
+				consumer("base", "base\nworkspace: b"),
 				consumer("holder", "holder"),
 				consumer("mixin", "holder › mixin"),
 				consumer("hub", "hub"),
@@ -5054,9 +5054,9 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 				},
 			},
 			want: column(
-				consumer("orgs", "orgs\nworkspace orgs"),
+				consumer("orgs", "orgs\nworkspace: orgs"),
 				consumer("org", "orgs › org\nextends security\ninitializers, terminators: root:security"),
-				consumer("account", "orgs › org › account\nextends org\ninitializers, terminators: root:security\nworkspaces a1, a2"),
+				consumer("account", "orgs › org › account\nextends org\ninitializers, terminators: root:security\nworkspaces: a1, a2"),
 				consumer("gate", "gate\ninitializers: gate"),
 				consumer("mixed", "mixed\nextends init, term, shared (not in tree)\ninitializers: root:init\nterminators: root:term"),
 			),

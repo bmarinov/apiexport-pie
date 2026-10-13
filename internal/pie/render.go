@@ -293,7 +293,7 @@ func baseNames(t WorkspaceType, types []WorkspaceType) string {
 	return strings.Join(bases, ", ")
 }
 
-// workspacesOf names the workspaces in the tree of t's type: "workspace orgs", "workspaces a, b", or
+// workspacesOf names the workspaces in the tree of t's type: "workspace: orgs", "workspaces: a, b", or
 // nothing.
 func workspacesOf(t WorkspaceType, workspaces []Workspace) string {
 	var named []string
@@ -306,7 +306,7 @@ func workspacesOf(t WorkspaceType, workspaces []Workspace) string {
 	case 0:
 		return ""
 	case 1:
-		return "workspace " + named[0]
+		return "workspace: " + named[0]
 	}
-	return "workspaces " + strings.Join(named, ", ")
+	return "workspaces: " + strings.Join(named, ", ")
 }
