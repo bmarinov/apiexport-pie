@@ -2,6 +2,7 @@ package pie_test
 
 import (
 	"strings"
+	"testing"
 
 	"github.com/bmarinov/apiexport-pie/internal/pie"
 )
@@ -140,3 +141,19 @@ const (
   "all-verbs:from" -> "all-verbs:to": "claims all verbs, through its virtual workspace" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
 `
 )
+
+// wantBlocks fails unless got holds every block, each verbatim and on whole lines. A case lists
+// the boxes and edges it is about; the rest of the diagram is pinned by its renderer's
+// whole-diagram cases.
+func wantBlocks(t *testing.T, got string, blocks ...string) {
+	t.Helper()
+	var missing []string
+	for _, block := range blocks {
+		if !strings.Contains("\n"+got, "\n"+strings.TrimSuffix(block, "\n")+"\n") {
+			missing = append(missing, strings.TrimSuffix(block, "\n"))
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("output lacks:\n%s\n\noutput:\n%s", strings.Join(missing, "\n---\n"), got)
+	}
+}
