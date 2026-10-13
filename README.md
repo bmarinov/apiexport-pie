@@ -5,11 +5,16 @@ Visualize [kcp](https://www.kcp.io/) APIExports and relations, without torching 
 
 ## Purpose
 
-The outputs show which kinds ship together in an APIExport, which workspaces get them, and what
-each export's provider may do there through its claims.
+The outputs show which kinds ship together in an APIExport, and the workspaces binding them. Claimed permissions are shown on arrows (read, write, all verbs).
 
 `--diff` compares two versions of a tree: a PR branch against main, or one release tag against the
 next.
+
+### APIExports
+
+kcp [APIExports](https://docs.kcp.io/kcp/v0.33/reference/crd/apis.kcp.io/apiexports/) are effectively API definitions described through resource schemas and the permissions a provider serving the API may claim.
+
+Since this means a lot of YAML, reading complex APIs or reviewing changes is mentally taxing, error prone, and hard to do unassisted.
 
 ## Install
 
@@ -67,4 +72,8 @@ repository, or of REMOTE (a remote name, URL or path). `--watch` needs a directo
 - **surface**: a row per kind and per set of claims, columns generated per consumer.
 - **diff**: `added:`, `removed:`, `moved:`, `changed:` lines for exports, kinds, claims, consumers and APIBindings.
 
-Warnings and notices are printed to stdout. Any kind in more than one APIExport is flagged with orange.
+Warnings and notices are printed to stderr. Any kind in more than one APIExport is flagged with orange.
+
+## Disclaimer on LLM use
+
+The code was written by an LLM. The design follows what I wanted the diagrams to show. Displayed information and assumptions related to bindings, workspaces and claims were verified against the kcp source.
