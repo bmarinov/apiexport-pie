@@ -8,3 +8,4 @@
 !/examples/**/*.yaml
 !/examples/**/*.svg
 !/.gitignore
+!/.github/**/*.yaml
