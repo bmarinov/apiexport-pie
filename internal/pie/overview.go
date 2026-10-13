@@ -522,8 +522,9 @@ func writeGroup(b *bytes.Buffer, indent string, g kindGroup, into bool) bool {
 }
 
 // reachOf sums up what a claim lets the provider do: the relation its arrow is drawn in, heavier
-// for more verbs, and its label: read or write (a verb other than get, list, watch), and selected
-// when a selector narrows it to some objects. The heaviest arrow, all verbs, needs no word for them.
+// for more verbs, and its label: read or write (a verb other than get, list, watch), and
+// defaultSelector when one narrows it to some objects. The heaviest arrow, all verbs, needs no word
+// for them.
 func reachOf(c Claim) (relation, string) {
 	r, words := claimsRead, []string{"read"}
 	switch {
@@ -533,7 +534,7 @@ func reachOf(c Claim) (relation, string) {
 		r, words = claimsWrite, []string{"write"}
 	}
 	if c.Selected {
-		words = append(words, "selected")
+		words = append(words, "defaultSelector")
 	}
 	return r, strings.Join(words, " · ")
 }

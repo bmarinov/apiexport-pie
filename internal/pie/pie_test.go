@@ -2296,7 +2296,7 @@ func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "an export's claims follow its kinds, a row per set of verbs, narrowed ones selected",
+			name: "an export's claims follow its kinds, a row per set of verbs, narrowed ones marked defaultSelector",
 			model: pie.Model{
 				Exports: []pie.Export{coreClaiming(
 					pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}},
@@ -2311,7 +2311,7 @@ func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 | **core.example.io** | Widget | ● |
 |  | Gadget | ● |
 |  | grants: * on workspaces, apibindings | ● |
-|  | grants: get, create on selected secrets | ● |
+|  | grants: get, create on secrets (defaultSelector) | ● |
 
 **Notices**
 
@@ -2708,7 +2708,7 @@ func TestRenderDiffListsClaims(t *testing.T) {
 			b: pie.Model{Exports: []pie.Export{claiming("pms/core.yaml", "core.example.io",
 				claim("", "secrets", "get", "list"), selected(claim("", "configmaps", "get", "create")))}},
 			want: `removed: claim by core.example.io on widgets.core.example.io: get
-added: claim by core.example.io on configmaps: get, create (selected)
+added: claim by core.example.io on configmaps: get, create (defaultSelector)
 `,
 		},
 		{
@@ -2718,7 +2718,7 @@ added: claim by core.example.io on configmaps: get, create (selected)
 			b: pie.Model{Exports: []pie.Export{claiming("pms/reader.yaml", "reader.example.io",
 				claim("core.example.io", "widgets", "get", "create"), claim("", "secrets", "get", "list"), selected(claim("", "events", "*")))}},
 			want: `changed: claim by reader.example.io on widgets.core.example.io: from get to get, create
-changed: claim by reader.example.io on events: from * to * (selected)
+changed: claim by reader.example.io on events: from * to * (defaultSelector)
 `,
 		},
 		{
@@ -4725,9 +4725,9 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · selected" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
+"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."serviceaccounts" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."events": "selected" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
+"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."events": "defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
 ` + overviewLegend(legendClaimsRead, legendClaimsWrite, legendClaimsAll, legendAPIGroup),
 		},
 		{
@@ -4807,7 +4807,7 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."exported" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:apis.kcp.io" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "read · selected" {style.stroke: "#7048e8"; style.stroke-dash: 4}
+"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "read · defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4}
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:rbac.authorization.k8s.io": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
 "apiexports"."apiexport:ws/other.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
@@ -4864,7 +4864,7 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
     "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · selected" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
+"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
 "apiexports"."apiexport:ws/providers.yaml#1" -> "resources"."builtin"."group:": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
 "apiexports"."apiexport:ws/providers.yaml#1" -> "resources"."builtin"."group:rbac.authorization.k8s.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
 ` + overviewLegend(legendClaimsRead, legendClaimsWrite, legendAPIGroup),
@@ -5003,11 +5003,11 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 			}},
 			want: column(
 				consumer("team", "universal › team"),
-				consumer("folder", "folder (nests)"),
+				consumer("folder", "folder"),
 				consumer("orgs", "orgs"),
 				consumer("tools", "orgs › tools, providers › tools"),
 				consumer("org", "orgs › org"),
-				consumer("account", "orgs › org › account (nests)"),
+				consumer("account", "orgs › org › account"),
 				consumer("providers", "providers"),
 				consumer("provider", "providers › provider"),
 			),
