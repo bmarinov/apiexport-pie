@@ -5,4 +5,7 @@
 !go.sum
 !README.md
 !MANUAL.md
+!/examples/**/*.yaml
+!/examples/**/*.svg
 !/.gitignore
+!/.github/**/*.yaml

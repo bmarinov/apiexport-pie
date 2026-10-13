@@ -221,14 +221,15 @@ func canWrite(verbs []string) bool {
 // their words.
 const grantsWidth = 60
 
-// grants tells what a binding lets the export's provider do: "grants: get, create on selected secrets".
+// grants tells what a binding lets the export's provider do: "grants: get, create on secrets
+// (defaultSelector)".
 // A resource that exports in the tree serve names them, since kcp ties such a claim to one of them.
 func (s claimSet) grants(serving map[string][]string) []string {
 	resources := make([]string, 0, len(s.claims))
 	for _, c := range s.claims {
 		resource := c.Resource
 		if c.Selected {
-			resource = "selected " + resource
+			resource += " (defaultSelector)"
 		}
 		if from := serving[resourceName(Resource{Group: c.Group, Name: c.Resource})]; len(from) > 0 {
 			resource += " from " + strings.Join(from, " or ")

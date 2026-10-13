@@ -522,8 +522,9 @@ func writeGroup(b *bytes.Buffer, indent string, g kindGroup, into bool) bool {
 }
 
 // reachOf sums up what a claim lets the provider do: the relation its arrow is drawn in, heavier
-// for more verbs, and its label: read or write (a verb other than get, list, watch), and selected
-// when a selector narrows it to some objects. The heaviest arrow, all verbs, needs no word for them.
+// for more verbs, and its label: read or write (a verb other than get, list, watch), and
+// defaultSelector when one narrows it to some objects. The heaviest arrow, all verbs, needs no word
+// for them.
 func reachOf(c Claim) (relation, string) {
 	r, words := claimsRead, []string{"read"}
 	switch {
@@ -533,7 +534,7 @@ func reachOf(c Claim) (relation, string) {
 		r, words = claimsWrite, []string{"write"}
 	}
 	if c.Selected {
-		words = append(words, "selected")
+		words = append(words, "defaultSelector")
 	}
 	return r, strings.Join(words, " · ")
 }
@@ -578,18 +579,26 @@ func openOf(e Export) []string {
 	return []string{"maximalPermissionPolicy: " + policy}
 }
 
-// warningLines are what is wrong with an export as written, as its box says it.
+// warningLines are what is wrong with an export as written, as its box says it: a warning's first
+// row says what is wrong, and what follows from it goes on a second behind an arrow, as the whole
+// reason is wider than the box d2 measures for bold text. A warning stays one entry, so a diff marks
+// it once.
 func warningLines(warnings []exportWarning) []string {
 	var lines []string
 	for _, w := range warnings {
-		lines = append(lines, "! "+w.reason)
+		line := "! " + w.reason
+		if what, follows, found := strings.Cut(w.reason, "; "); found {
+			line = "! " + what + "\n→ " + follows
+		}
+		lines = append(lines, line)
 	}
 	return lines
 }
 
-// writeCell writes lines as a cell of an export box's grid, as tall as the lines.
+// writeCell writes lines as a cell of an export box's grid, as tall as its rows.
 func writeCell(b *bytes.Buffer, key, class string, lines []string) {
-	fmt.Fprintf(b, "    %q: %q {class: %s; height: %d}\n", key, strings.Join(lines, "\n"), class, lineHeight*len(lines))
+	text := strings.Join(lines, "\n")
+	fmt.Fprintf(b, "    %q: %q {class: %s; height: %d}\n", key, text, class, lineHeight*(strings.Count(text, "\n")+1))
 }
 
 // needWords say what a claim lets the provider do, by the relation its arrow is drawn in.

@@ -109,12 +109,12 @@ func onResource(c Claim) func(Claim) bool {
 	return func(x Claim) bool { return x.Group == c.Group && x.Resource == c.Resource }
 }
 
-// reachWords say what a claim lets the provider do: its verbs as written, and whether a selector
-// narrows it.
+// reachWords say what a claim lets the provider do: its verbs as written, and whether a
+// defaultSelector narrows it.
 func reachWords(c Claim) string {
 	words := strings.Join(c.Verbs, ", ")
 	if c.Selected {
-		words += " (selected)"
+		words += " (defaultSelector)"
 	}
 	return words
 }

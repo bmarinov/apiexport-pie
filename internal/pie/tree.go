@@ -70,9 +70,8 @@ type place struct {
 
 // placesOf lists the WorkspaceTypes that are consumers, in tree order: each type with no parent in the tree,
 // in the order of the files, followed by what its workspaces hold. A label is the type's paths down
-// the tree, "(nests)" when its workspaces may hold their own kind, and the types it extends. A type
-// only other types extend is not a consumer unless the tree places it or has a workspace of it: its
-// bindings are the extending types', drawn dashed.
+// the tree and the types it extends. A type only other types extend is not a consumer unless the
+// tree places it or has a workspace of it: its bindings are the extending types', drawn dashed.
 func placesOf(m Model) []place {
 	types := m.WorkspaceTypes
 	tr := typeTreeOf(types)
@@ -126,9 +125,6 @@ func placesOf(m Model) []place {
 			continue
 		}
 		label := strings.Join(tr.paths(t.Name, nil), ", ")
-		if slices.Contains(tr.parents[t.Name], t.Name) {
-			label += " (nests)"
-		}
 		if named[t.Name] > 1 {
 			label += " · " + location(t.Path, t.Doc)
 		}

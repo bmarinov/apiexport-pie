@@ -891,11 +891,11 @@ func TestRenderD2DrawsConsumers(t *testing.T) {
 			},
 			want: `"workspacetype:types/orgs.yaml#1": {
   shape: sql_table
-  label: "WorkspaceType orgs · extends shared (not in tree) · workspace orgs"
+  label: "WorkspaceType orgs · extends shared (not in tree) · workspace: orgs"
 }
 "workspacetype:types/account.yaml#1": {
   shape: sql_table
-  label: "WorkspaceType account · workspaces a, b"
+  label: "WorkspaceType account · workspaces: a, b"
 }
 `,
 		},
@@ -2296,7 +2296,7 @@ func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "an export's claims follow its kinds, a row per set of verbs, narrowed ones selected",
+			name: "an export's claims follow its kinds, a row per set of verbs, narrowed ones marked defaultSelector",
 			model: pie.Model{
 				Exports: []pie.Export{coreClaiming(
 					pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}},
@@ -2311,7 +2311,7 @@ func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 | **core.example.io** | Widget | ● |
 |  | Gadget | ● |
 |  | grants: * on workspaces, apibindings | ● |
-|  | grants: get, create on selected secrets | ● |
+|  | grants: get, create on secrets (defaultSelector) | ● |
 
 **Notices**
 
@@ -2708,7 +2708,7 @@ func TestRenderDiffListsClaims(t *testing.T) {
 			b: pie.Model{Exports: []pie.Export{claiming("pms/core.yaml", "core.example.io",
 				claim("", "secrets", "get", "list"), selected(claim("", "configmaps", "get", "create")))}},
 			want: `removed: claim by core.example.io on widgets.core.example.io: get
-added: claim by core.example.io on configmaps: get, create (selected)
+added: claim by core.example.io on configmaps: get, create (defaultSelector)
 `,
 		},
 		{
@@ -2718,7 +2718,7 @@ added: claim by core.example.io on configmaps: get, create (selected)
 			b: pie.Model{Exports: []pie.Export{claiming("pms/reader.yaml", "reader.example.io",
 				claim("core.example.io", "widgets", "get", "create"), claim("", "secrets", "get", "list"), selected(claim("", "events", "*")))}},
 			want: `changed: claim by reader.example.io on widgets.core.example.io: from get to get, create
-changed: claim by reader.example.io on events: from * to * (selected)
+changed: claim by reader.example.io on events: from * to * (defaultSelector)
 `,
 		},
 		{
@@ -4448,15 +4448,15 @@ func TestRenderOverviewD2WarnsOnTheExportBox(t *testing.T) {
     grid-columns: 1
     grid-gap: 0
     "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
-    "warnings": "! apis.kcp.io/v1alpha1 is deprecated; claims get verbs *" {class: warning; height: 17}
+    "warnings": "! apis.kcp.io/v1alpha1 is deprecated\n→ claims get verbs *" {class: warning; height: 34}
   }
 `,
 		},
 		{
-			name: "a line per warning, so a claim with a literal identity hash of an export whose identity kcp generates is one more",
+			name: "a warning starts a line, and what follows from it takes the next behind an arrow, so a claim with a literal identity hash of an export whose identity kcp generates is two more",
 			model: pie.Model{Exports: []pie.Export{coreExportAt("pms/core.yaml"),
 				withV1alpha1(withClaims(system, pie.Claim{Group: "core.example.io", Resource: "widgets", Verbs: []string{"get"}, FromExport: true, LiteralHash: true}))}},
-			want: `    "warnings": "! apis.kcp.io/v1alpha1 is deprecated; claims get verbs *\n! identityHash for widgets is a literal; core.example.io's identity differs per installation" {class: warning; height: 34}`,
+			want: `    "warnings": "! apis.kcp.io/v1alpha1 is deprecated\n→ claims get verbs *\n! identityHash for widgets is a literal\n→ core.example.io's identity differs per installation" {class: warning; height: 68}`,
 		},
 		{
 			name: "an export in a later document of its file has its own warnings",
@@ -4555,6 +4555,12 @@ func TestRenderOverviewDiffD2MarksWhatAnExportLeavesOpenAsItChanges(t *testing.T
 			a:    pie.Model{Exports: []pie.Export{core}},
 			b:    pie.Model{Exports: []pie.Export{withV1alpha1(core)}},
 			want: `"warnings": "+! apis.kcp.io/v1alpha1 is deprecated" {class: warning; height: 17}`,
+		},
+		{
+			name: "a warning on two rows is marked once, on its first",
+			a:    pie.Model{Exports: []pie.Export{core}},
+			b:    pie.Model{Exports: []pie.Export{withV1alpha1(withClaims(core, pie.Claim{Resource: "secrets", Verbs: []string{"*"}}))}},
+			want: `"warnings": "+! apis.kcp.io/v1alpha1 is deprecated\n→ claims get verbs *" {class: warning; height: 34}`,
 		},
 	}
 	for _, tt := range warnings {
@@ -4725,9 +4731,9 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
   }
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · selected" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
+"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."serviceaccounts" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."events": "selected" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
+"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."events": "defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
 ` + overviewLegend(legendClaimsRead, legendClaimsWrite, legendClaimsAll, legendAPIGroup),
 		},
 		{
@@ -4807,7 +4813,7 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 }
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."exported" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:apis.kcp.io" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "read · selected" {style.stroke: "#7048e8"; style.stroke-dash: 4}
+"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "read · defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4}
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
 "apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:rbac.authorization.k8s.io": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
 "apiexports"."apiexport:ws/other.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
@@ -4864,7 +4870,7 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
     "story": "maximalPermissionPolicy: none" {class: story; height: 17}
   }
 }
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · selected" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
+"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
 "apiexports"."apiexport:ws/providers.yaml#1" -> "resources"."builtin"."group:": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
 "apiexports"."apiexport:ws/providers.yaml#1" -> "resources"."builtin"."group:rbac.authorization.k8s.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
 ` + overviewLegend(legendClaimsRead, legendClaimsWrite, legendAPIGroup),
@@ -5003,11 +5009,11 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 			}},
 			want: column(
 				consumer("team", "universal › team"),
-				consumer("folder", "folder (nests)"),
+				consumer("folder", "folder"),
 				consumer("orgs", "orgs"),
 				consumer("tools", "orgs › tools, providers › tools"),
 				consumer("org", "orgs › org"),
-				consumer("account", "orgs › org › account (nests)"),
+				consumer("account", "orgs › org › account"),
 				consumer("providers", "providers"),
 				consumer("provider", "providers › provider"),
 			),
@@ -5027,7 +5033,7 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 			},
 			want: column(
 				consumer("account", "account\nextends base, mixin, hub, shared (not in tree)"),
-				consumer("base", "base\nworkspace b"),
+				consumer("base", "base\nworkspace: b"),
 				consumer("holder", "holder"),
 				consumer("mixin", "holder › mixin"),
 				consumer("hub", "hub"),
@@ -5054,9 +5060,9 @@ func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
 				},
 			},
 			want: column(
-				consumer("orgs", "orgs\nworkspace orgs"),
+				consumer("orgs", "orgs\nworkspace: orgs"),
 				consumer("org", "orgs › org\nextends security\ninitializers, terminators: root:security"),
-				consumer("account", "orgs › org › account\nextends org\ninitializers, terminators: root:security\nworkspaces a1, a2"),
+				consumer("account", "orgs › org › account\nextends org\ninitializers, terminators: root:security\nworkspaces: a1, a2"),
 				consumer("gate", "gate\ninitializers: gate"),
 				consumer("mixed", "mixed\nextends init, term, shared (not in tree)\ninitializers: root:init\nterminators: root:term"),
 			),
