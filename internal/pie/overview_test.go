@@ -8,11 +8,10 @@ import (
 	"github.com/bmarinov/apiexport-pie/internal/pie"
 )
 
+// TestRenderOverviewD2 pins whole overviews: the order of columns, boxes, edges and legend. The
+// other tests of the overview assert only the parts each is about.
 func TestRenderOverviewD2(t *testing.T) {
 	core := pie.Export{Path: "pms/export.yaml", Doc: 1, Name: "core.example.io"}
-	exportOf := func(path, name string, resources ...pie.Resource) pie.Export {
-		return pie.Export{Path: path, Doc: 1, Name: name, Resources: resources}
-	}
 	tests := []struct {
 		name  string
 		model pie.Model
@@ -63,148 +62,6 @@ func TestRenderOverviewD2(t *testing.T) {
 }
 "consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"}
 ` + overviewLegend(legendBindsByDefault),
-		},
-		{
-			name: "an export stands in the box of the workspace the references to it agree on; one they disagree on, or nothing refers to, stands alone",
-			model: pie.Model{
-				Exports: []pie.Export{
-					withClaims(exportOf("pms/core.yaml", "core.example.io", widgetResource()), pie.Claim{Group: "core.example.io", Resource: "widgets", Verbs: []string{"get"}}),
-					exportOf("pms/other.yaml", "other.example.io"),
-					exportOf("pms/lone.yaml", "lone.example.io"),
-				},
-				Schemas: []pie.Schema{widgetSchemaAt("pms/widgets.yaml")},
-				WorkspaceTypes: []pie.WorkspaceType{
-					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}, {Path: "root:a", Name: "other.example.io"}}},
-					{Path: "types/org.yaml", Doc: 1, Name: "org", Binds: []pie.ExportRef{{Path: "root:b", Name: "other.example.io"}}},
-				},
-			},
-			want: `"resources": {
-  label: "RESOURCES"
-  class: column
-  "group:core.example.io": {
-    label: "core.example.io"
-    class: group
-    "widgets.core.example.io": "Widget" {class: kind}
-  }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "workspace:root:pms": "Workspace root:pms" {class: workspace}
-  "workspace:root:pms"."apiexport:pms/core.yaml#1": {
-    label: "core.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
-  }
-  "apiexport:pms/other.yaml#1": {
-    label: "other.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "bound at account, org\nmaximalPermissionPolicy: none" {class: story; height: 34}
-  }
-  "apiexport:pms/lone.yaml#1": {
-    label: "lone.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-}
-"consumers": {
-  label: "CONSUMERS"
-  class: column
-  "workspacetype:types/account.yaml#1": "account" {class: workspacetype}
-  "workspacetype:types/org.yaml#1": "org" {class: workspacetype}
-}
-"apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" -> "resources"."group:core.example.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
-"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."apiexport:pms/other.yaml#1" {style.stroke: "#1971c2"}
-"consumers"."workspacetype:types/org.yaml#1" -> "apiexports"."apiexport:pms/other.yaml#1" {style.stroke: "#1971c2"}
-` + overviewLegend(legendBindsByDefault, legendServes, legendClaimsRead, legendAPIGroup),
-		},
-		{
-			name: "an export's box says where it is bound, each consumer once: a WorkspaceType by its name, a directory of APIBinding files by the shortest end of its path no other such directory shares, as its own box says it",
-			model: pie.Model{
-				Exports: []pie.Export{{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io"}},
-				WorkspaceTypes: []pie.WorkspaceType{
-					{Path: "types/a.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}},
-					{Path: "types/b.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}},
-				},
-				APIBindings: []pie.APIBinding{
-					{Path: "a/manifests/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
-					{Path: "b/manifests/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
-					{Path: "c/kcp/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
-					{Path: "kcp/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
-					{Path: "d/e/tools/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
-				},
-			},
-			want: `"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "workspace:root:pms": "Workspace root:pms" {class: workspace}
-  "workspace:root:pms"."apiexport:pms/core.yaml#1": {
-    label: "core.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "bound at account, a/manifests, b/manifests, c/kcp, kcp, tools\nmaximalPermissionPolicy: none" {class: story; height: 34}
-  }
-}
-"consumers": {
-  label: "CONSUMERS"
-  class: column
-  "workspacetype:types/a.yaml#1": "account · types/a.yaml#1" {class: workspacetype}
-  "workspacetype:types/b.yaml#1": "account · types/b.yaml#1" {class: workspacetype}
-  "apibindings:a/manifests": "APIBindings in a/manifests" {class: apibindings}
-  "apibindings:b/manifests": "APIBindings in b/manifests" {class: apibindings}
-  "apibindings:c/kcp": "APIBindings in c/kcp" {class: apibindings}
-  "apibindings:kcp": "APIBindings in kcp" {class: apibindings}
-  "apibindings:d/e/tools": "APIBindings in tools" {class: apibindings}
-}
-"consumers"."workspacetype:types/a.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
-"consumers"."workspacetype:types/b.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}
-"consumers"."apibindings:a/manifests" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
-"consumers"."apibindings:b/manifests" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
-"consumers"."apibindings:c/kcp" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
-"consumers"."apibindings:kcp" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
-"consumers"."apibindings:d/e/tools" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}
-` + overviewLegend(legendBindsByDefault, legendBindsByAPIBinding),
-		},
-		{
-			name: "bindings through extend are dashed, a type only extended is a tag, not a consumer, and a directory of APIBinding files binds in green",
-			model: pie.Model{
-				Exports: []pie.Export{core},
-				WorkspaceTypes: []pie.WorkspaceType{
-					{Path: "types/account.yaml", Doc: 1, Name: "account", Extends: []pie.TypeRef{{Name: "security"}}},
-					{Path: "types/security.yaml", Doc: 1, Name: "security", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}},
-				},
-				APIBindings: []pie.APIBinding{{Path: "kcp/01/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}}},
-			},
-			want: `"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "workspace:root:pms": "Workspace root:pms" {class: workspace}
-  "workspace:root:pms"."apiexport:pms/export.yaml#1": {
-    label: "core.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "bound at account, 01\nmaximalPermissionPolicy: none" {class: story; height: 34}
-  }
-}
-"consumers": {
-  label: "CONSUMERS"
-  class: column
-  "workspacetype:types/account.yaml#1": "account\nextends security" {class: workspacetype}
-  "apibindings:kcp/01": "APIBindings in 01" {class: apibindings}
-}
-"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"; style.stroke-dash: 2}
-"consumers"."apibindings:kcp/01" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#2f9e44"}
-` + overviewLegend(legendBindsThroughExtend, legendBindsByAPIBinding),
 		},
 		{
 			name: "bindings kcp refuses together are red and name the exports they conflict with",
@@ -279,136 +136,6 @@ func TestRenderOverviewD2(t *testing.T) {
 "consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/d.yaml#1" {style.stroke: "#1971c2"}
 ` + overviewLegend(legendBindsByDefault, legendBindsRefused, legendServes, legendAPIGroup, legendSharedKind),
 		},
-		{
-			name: "an export that clashes on several resources is named once",
-			model: pie.Model{
-				Exports: []pie.Export{
-					exportOf("ws/a.yaml", "a.example.io", widgetResource(), gadgetResource()),
-					exportOf("ws/b.yaml", "b.example.io", widgetResource(), gadgetResource()),
-				},
-				WorkspaceTypes: []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{
-					{Path: "root:pms", Name: "a.example.io"}, {Path: "root:pms", Name: "b.example.io"},
-				}}},
-			},
-			want: `"resources": {
-  label: "RESOURCES"
-  class: column
-  "group:core.example.io": {
-    label: "core.example.io"
-    class: group
-    "widgets.core.example.io": "widgets · not in tree" {class: kind; style.fill: "#f08c00"}
-    "gadgets.core.example.io": "gadgets · not in tree" {class: kind; style.fill: "#f08c00"}
-  }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "workspace:root:pms": "Workspace root:pms" {class: workspace}
-  "workspace:root:pms"."apiexport:ws/a.yaml#1": {
-    label: "a.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
-  }
-  "workspace:root:pms"."apiexport:ws/b.yaml#1": {
-    label: "b.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
-  }
-}
-"consumers": {
-  label: "CONSUMERS"
-  class: column
-  "workspacetype:types/account.yaml#1": "account" {class: workspacetype}
-}
-"apiexports"."workspace:root:pms"."apiexport:ws/a.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."workspace:root:pms"."apiexport:ws/a.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."workspace:root:pms"."apiexport:ws/b.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."workspace:root:pms"."apiexport:ws/b.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}
-"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/a.yaml#1": "conflicts with b.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
-"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:ws/b.yaml#1": "conflicts with a.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}
-` + overviewLegend(legendBindsRefused, legendServes, legendAPIGroup, legendSharedKind),
-		},
-		{
-			name: "exports outside the tree are a line on each consumer binding them, by workspace, not boxes with arrows; one bound through a base says so",
-			model: pie.Model{
-				WorkspaceTypes: []pie.WorkspaceType{
-					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}, {Name: "local.example.io"}, {Path: "root", Name: "topology.kcp.io"}}},
-					{Path: "types/org.yaml", Doc: 1, Name: "org", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}},
-						Extends: []pie.TypeRef{{Path: "root", Name: "base"}}},
-					{Path: "types/base.yaml", Doc: 1, Name: "base", Binds: []pie.ExportRef{{Path: "root:kcp", Name: "shards.kcp.io"}}},
-				},
-				APIBindings: []pie.APIBinding{{Path: "x/tenancy.yaml", Doc: 1, Name: "tenancy", Export: pie.ExportRef{Path: "root", Name: "tenancy.kcp.io"}}},
-			},
-			want: `"consumers": {
-  label: "CONSUMERS"
-  class: column
-  "workspacetype:types/account.yaml#1": "account\nbinds tenancy.kcp.io, topology.kcp.io @ root (kcp)\nbinds local.example.io @ (own workspace) (not in tree)" {class: workspacetype}
-  "workspacetype:types/org.yaml#1": "org\nextends base\nbinds tenancy.kcp.io @ root (kcp)\nbinds shards.kcp.io @ root:kcp (not in tree, through base)" {class: workspacetype}
-  "apibindings:x": "APIBindings in x\nbinds tenancy.kcp.io @ root (kcp)" {class: apibindings}
-}
-`,
-		},
-		{
-			name: "kcp's own APIExports in root say kcp, the same names in another workspace do not",
-			model: pie.Model{
-				WorkspaceTypes: []pie.WorkspaceType{
-					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{
-						{Path: "root", Name: "shards.core.kcp.io"}, {Path: "root:org", Name: "tenancy.kcp.io"}, {Path: "root", Name: "cache.kcp.io"},
-						{Path: "root", Name: "local.example.io"}, {Path: "root", Name: "migration.kcp.io"}}},
-				},
-			},
-			want: `"consumers": {
-  label: "CONSUMERS"
-  class: column
-  "workspacetype:types/account.yaml#1": "account\nbinds shards.core.kcp.io, cache.kcp.io, migration.kcp.io @ root (kcp)\nbinds tenancy.kcp.io @ root:org; local.example.io @ root (not in tree)" {class: workspacetype}
-}
-`,
-		},
-		{
-			name: "copies of an export or a WorkspaceType say where they are written, and a binding points at every copy",
-			model: pie.Model{
-				Exports: []pie.Export{
-					{Path: "a/export.yaml", Doc: 1, Name: "core.example.io"},
-					{Path: "b/export.yaml", Doc: 1, Name: "core.example.io"},
-				},
-				WorkspaceTypes: []pie.WorkspaceType{
-					{Path: "a/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}},
-					{Path: "b/account.yaml", Doc: 1, Name: "account"},
-				},
-			},
-			want: `"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "workspace:root:pms": "Workspace root:pms" {class: workspace}
-  "workspace:root:pms"."apiexport:a/export.yaml#1": {
-    label: "core.example.io · a/export.yaml#1"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
-  }
-  "workspace:root:pms"."apiexport:b/export.yaml#1": {
-    label: "core.example.io · b/export.yaml#1"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
-  }
-}
-"consumers": {
-  label: "CONSUMERS"
-  class: column
-  "workspacetype:a/account.yaml#1": "account · a/account.yaml#1" {class: workspacetype}
-  "workspacetype:b/account.yaml#1": "account · b/account.yaml#1" {class: workspacetype}
-}
-"consumers"."workspacetype:a/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:a/export.yaml#1" {style.stroke: "#1971c2"}
-"consumers"."workspacetype:a/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:b/export.yaml#1" {style.stroke: "#1971c2"}
-` + overviewLegend(legendBindsByDefault),
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -419,13 +146,219 @@ func TestRenderOverviewD2(t *testing.T) {
 	}
 }
 
+func TestRenderOverviewD2DrawsConsumers(t *testing.T) {
+	core := pie.Export{Path: "pms/export.yaml", Doc: 1, Name: "core.example.io"}
+	// placed has exports the references to it agree on, disagree on, and say nothing about.
+	placed := pie.Model{
+		Exports: []pie.Export{
+			withClaims(exportOf("pms/core.yaml", "core.example.io", widgetResource()), pie.Claim{Group: "core.example.io", Resource: "widgets", Verbs: []string{"get"}}),
+			exportOf("pms/other.yaml", "other.example.io"),
+			exportOf("pms/lone.yaml", "lone.example.io"),
+		},
+		Schemas: []pie.Schema{widgetSchemaAt("pms/widgets.yaml")},
+		WorkspaceTypes: []pie.WorkspaceType{
+			{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}, {Path: "root:a", Name: "other.example.io"}}},
+			{Path: "types/org.yaml", Doc: 1, Name: "org", Binds: []pie.ExportRef{{Path: "root:b", Name: "other.example.io"}}},
+		},
+	}
+	// manyBinders has one export bound by two types of one name and by binding files in five directories.
+	manyBinders := pie.Model{
+		Exports: []pie.Export{{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io"}},
+		WorkspaceTypes: []pie.WorkspaceType{
+			{Path: "types/a.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}},
+			{Path: "types/b.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}},
+		},
+		APIBindings: []pie.APIBinding{
+			{Path: "a/manifests/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
+			{Path: "b/manifests/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
+			{Path: "c/kcp/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
+			{Path: "kcp/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
+			{Path: "d/e/tools/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}},
+		},
+	}
+	// extended has a type binding through a base nothing else makes a consumer, and a binding directory.
+	extended := pie.Model{
+		Exports: []pie.Export{core},
+		WorkspaceTypes: []pie.WorkspaceType{
+			{Path: "types/account.yaml", Doc: 1, Name: "account", Extends: []pie.TypeRef{{Name: "security"}}},
+			{Path: "types/security.yaml", Doc: 1, Name: "security", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}},
+		},
+		APIBindings: []pie.APIBinding{{Path: "kcp/01/core.yaml", Doc: 1, Name: "core", Export: pie.ExportRef{Path: "root:pms", Name: "core.example.io"}}},
+	}
+	// outsiders bind exports the tree does not define, some of them kcp's own, one through a base.
+	outsiders := pie.Model{
+		WorkspaceTypes: []pie.WorkspaceType{
+			{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}, {Name: "local.example.io"}, {Path: "root", Name: "topology.kcp.io"}}},
+			{Path: "types/org.yaml", Doc: 1, Name: "org", Binds: []pie.ExportRef{{Path: "root", Name: "tenancy.kcp.io"}},
+				Extends: []pie.TypeRef{{Path: "root", Name: "base"}}},
+			{Path: "types/base.yaml", Doc: 1, Name: "base", Binds: []pie.ExportRef{{Path: "root:kcp", Name: "shards.kcp.io"}}},
+		},
+		APIBindings: []pie.APIBinding{{Path: "x/tenancy.yaml", Doc: 1, Name: "tenancy", Export: pie.ExportRef{Path: "root", Name: "tenancy.kcp.io"}}},
+	}
+	// copies has an export and a WorkspaceType written twice.
+	copies := pie.Model{
+		Exports: []pie.Export{
+			{Path: "a/export.yaml", Doc: 1, Name: "core.example.io"},
+			{Path: "b/export.yaml", Doc: 1, Name: "core.example.io"},
+		},
+		WorkspaceTypes: []pie.WorkspaceType{
+			{Path: "a/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "core.example.io"}}},
+			{Path: "b/account.yaml", Doc: 1, Name: "account"},
+		},
+	}
+	tests := []struct {
+		name  string
+		model pie.Model
+		has   []string
+	}{
+		{
+			name:  "an export stands in the box of the workspace the references to it agree on, and edges follow it there",
+			model: placed,
+			has: []string{
+				`  "workspace:root:pms": "Workspace root:pms" {class: workspace}`,
+				`  "workspace:root:pms"."apiexport:pms/core.yaml#1": {`,
+				`"apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}`,
+				`"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#1971c2"}`,
+			},
+		},
+		{
+			name:  "an export the references disagree on, or nothing refers to, stands alone in APIEXPORTS",
+			model: placed,
+			has: []string{
+				`  "apiexport:pms/other.yaml#1": {`,
+				`  "apiexport:pms/lone.yaml#1": {`,
+				`"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."apiexport:pms/other.yaml#1" {style.stroke: "#1971c2"}`,
+				`"consumers"."workspacetype:types/org.yaml#1" -> "apiexports"."apiexport:pms/other.yaml#1" {style.stroke: "#1971c2"}`,
+			},
+		},
+		{
+			name:  "an export's story says where it is bound, each consumer once, a WorkspaceType by its name",
+			model: placed,
+			has: []string{
+				`    "story": "bound at account, org\nmaximalPermissionPolicy: none" {class: story; height: 34}`,
+				`    "story": "maximalPermissionPolicy: none" {class: story; height: 17}`,
+			},
+		},
+		{
+			name:  "copies of a WorkspaceType say where they are written, and the story names them once",
+			model: manyBinders,
+			has: []string{
+				`  "workspacetype:types/a.yaml#1": "account · types/a.yaml#1" {class: workspacetype}`,
+				`  "workspacetype:types/b.yaml#1": "account · types/b.yaml#1" {class: workspacetype}`,
+				`    "story": "bound at account, a/manifests, b/manifests, c/kcp, kcp, tools\nmaximalPermissionPolicy: none" {class: story; height: 34}`,
+			},
+		},
+		{
+			name:  "a directory of APIBinding files is named by the shortest end of its path no other such directory shares, on its box and in the story",
+			model: manyBinders,
+			has: []string{
+				`  "apibindings:a/manifests": "APIBindings in a/manifests" {class: apibindings}`,
+				`  "apibindings:b/manifests": "APIBindings in b/manifests" {class: apibindings}`,
+				`  "apibindings:c/kcp": "APIBindings in c/kcp" {class: apibindings}`,
+				`  "apibindings:kcp": "APIBindings in kcp" {class: apibindings}`,
+				`  "apibindings:d/e/tools": "APIBindings in tools" {class: apibindings}`,
+				`"consumers"."apibindings:d/e/tools" -> "apiexports"."workspace:root:pms"."apiexport:pms/core.yaml#1" {style.stroke: "#2f9e44"}`,
+			},
+		},
+		{
+			name:  "bindings through extend are dashed",
+			model: extended,
+			has: []string{
+				`  "workspacetype:types/account.yaml#1": "account\nextends security" {class: workspacetype}`,
+				`"consumers"."workspacetype:types/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#1971c2"; style.stroke-dash: 2}`,
+				legendBindsThroughExtend,
+			},
+		},
+		{
+			name:  "a type only other types extend is a line on them, not a consumer",
+			model: extended,
+			has: []string{
+				`"consumers": {
+  label: "CONSUMERS"
+  class: column
+  "workspacetype:types/account.yaml#1": "account\nextends security" {class: workspacetype}
+  "apibindings:kcp/01": "APIBindings in 01" {class: apibindings}
+}`,
+				`    "story": "bound at account, 01\nmaximalPermissionPolicy: none" {class: story; height: 34}`,
+			},
+		},
+		{
+			name:  "a directory of APIBinding files binds in green",
+			model: extended,
+			has: []string{
+				`  "apibindings:kcp/01": "APIBindings in 01" {class: apibindings}`,
+				`"consumers"."apibindings:kcp/01" -> "apiexports"."workspace:root:pms"."apiexport:pms/export.yaml#1" {style.stroke: "#2f9e44"}`,
+				legendBindsByAPIBinding,
+			},
+		},
+		{
+			name:  "exports outside the tree are a line on each consumer binding them, by workspace, not boxes with arrows",
+			model: outsiders,
+			has: []string{
+				`"consumers": {
+  label: "CONSUMERS"
+  class: column
+  "workspacetype:types/account.yaml#1": "account\nbinds tenancy.kcp.io, topology.kcp.io @ root (kcp)\nbinds local.example.io @ (own workspace) (not in tree)" {class: workspacetype}`,
+				`  "apibindings:x": "APIBindings in x\nbinds tenancy.kcp.io @ root (kcp)" {class: apibindings}
+}
+`,
+			},
+		},
+		{
+			name:  "an export outside the tree bound through a base says so",
+			model: outsiders,
+			has: []string{
+				`  "workspacetype:types/org.yaml#1": "org\nextends base\nbinds tenancy.kcp.io @ root (kcp)\nbinds shards.kcp.io @ root:kcp (not in tree, through base)" {class: workspacetype}`,
+			},
+		},
+		{
+			name: "kcp's own APIExports in root say kcp, the same names in another workspace do not",
+			model: pie.Model{
+				WorkspaceTypes: []pie.WorkspaceType{
+					{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{
+						{Path: "root", Name: "shards.core.kcp.io"}, {Path: "root:org", Name: "tenancy.kcp.io"}, {Path: "root", Name: "cache.kcp.io"},
+						{Path: "root", Name: "local.example.io"}, {Path: "root", Name: "migration.kcp.io"}}},
+				},
+			},
+			has: []string{
+				`  "workspacetype:types/account.yaml#1": "account\nbinds shards.core.kcp.io, cache.kcp.io, migration.kcp.io @ root (kcp)\nbinds tenancy.kcp.io @ root:org; local.example.io @ root (not in tree)" {class: workspacetype}`,
+			},
+		},
+		{
+			name:  "copies of an export say where they are written, and a binding points at every copy",
+			model: copies,
+			has: []string{
+				`  "workspace:root:pms"."apiexport:a/export.yaml#1": {
+    label: "core.example.io · a/export.yaml#1"`,
+				`  "workspace:root:pms"."apiexport:b/export.yaml#1": {
+    label: "core.example.io · b/export.yaml#1"`,
+				`"consumers"."workspacetype:a/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:a/export.yaml#1" {style.stroke: "#1971c2"}`,
+				`"consumers"."workspacetype:a/account.yaml#1" -> "apiexports"."workspace:root:pms"."apiexport:b/export.yaml#1" {style.stroke: "#1971c2"}`,
+			},
+		},
+		{
+			name:  "copies of a WorkspaceType say where they are written, each a consumer of its own",
+			model: copies,
+			has: []string{
+				`  "workspacetype:a/account.yaml#1": "account · a/account.yaml#1" {class: workspacetype}`,
+				`  "workspacetype:b/account.yaml#1": "account · b/account.yaml#1" {class: workspacetype}`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wantBlocks(t, string(pie.RenderOverviewD2(tt.model)), tt.has...)
+		})
+	}
+}
+
 func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
 	uiResource := pie.Resource{Group: "ui.example.io", Name: "panels", Schema: "v1.panels.ui.example.io"}
 	panelSchema := pie.Schema{Path: "ws/panels.yaml", Name: "v1.panels.ui.example.io", Group: "ui.example.io", Kind: "Panel", Plural: "panels"}
 	tests := []struct {
 		name  string
 		model pie.Model
-		want  string
+		has   []string
 	}{
 		{
 			name: "each kind stands once in RESOURCES, in a box of its API group, pointed at by the export serving it",
@@ -435,7 +368,8 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
 				},
 				Schemas: []pie.Schema{widgetSchemaAt("ws/widgets.yaml"), gadgetSchemaAt("ws/gadgets.yaml"), panelSchema},
 			},
-			want: `"resources": {
+			has: []string{
+				`"resources": {
   label: "RESOURCES"
   class: column
   "group:core.example.io": {
@@ -449,22 +383,12 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
     class: group
     "panels.ui.example.io": "Panel" {class: kind}
   }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "apiexport:ws/core.yaml#1": {
-    label: "core.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:ui.example.io"."panels.ui.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}
-` + overviewLegend(legendServes, legendAPIGroup),
+}`,
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}`,
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:ui.example.io"."panels.ui.example.io" {style.stroke: "#868e96"}`,
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}`,
+				legendServes, legendAPIGroup,
+			},
 		},
 		{
 			name: "a kind two exports serve, as in a migration, is drawn once, orange, with an arrow from each",
@@ -475,42 +399,13 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
 				},
 				Schemas: []pie.Schema{widgetSchemaAt("ws/widgets.yaml"), panelSchema},
 			},
-			want: `"resources": {
-  label: "RESOURCES"
-  class: column
-  "group:core.example.io": {
-    label: "core.example.io"
-    class: group
-    "widgets.core.example.io": "Widget" {class: kind}
-  }
-  "group:ui.example.io": {
-    label: "ui.example.io"
-    class: group
-    "panels.ui.example.io": "Panel" {class: kind; style.fill: "#f08c00"}
-  }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "apiexport:ws/core.yaml#1": {
-    label: "core.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-  "apiexport:ws/ui.yaml#1": {
-    label: "ui.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:ui.example.io"."panels.ui.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:ws/ui.yaml#1" -> "resources"."group:ui.example.io"."panels.ui.example.io" {style.stroke: "#868e96"}
-` + overviewLegend(legendServes, legendAPIGroup, legendSharedKind),
+			has: []string{
+				`    "widgets.core.example.io": "Widget" {class: kind}`,
+				`    "panels.ui.example.io": "Panel" {class: kind; style.fill: "#f08c00"}`,
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:ui.example.io"."panels.ui.example.io" {style.stroke: "#868e96"}`,
+				`"apiexports"."apiexport:ws/ui.yaml#1" -> "resources"."group:ui.example.io"."panels.ui.example.io" {style.stroke: "#868e96"}`,
+				legendSharedKind,
+			},
 		},
 		{
 			name: "a kind is named by the schema next to its export, when copies of the schema are elsewhere too",
@@ -521,28 +416,7 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
 					widgetSchemaAt("ws/widgets.yaml"),
 				},
 			},
-			want: `"resources": {
-  label: "RESOURCES"
-  class: column
-  "group:core.example.io": {
-    label: "core.example.io"
-    class: group
-    "widgets.core.example.io": "Widget" {class: kind}
-  }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "apiexport:ws/core.yaml#1": {
-    label: "core.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-` + overviewLegend(legendServes, legendAPIGroup),
+			has: []string{`    "widgets.core.example.io": "Widget" {class: kind}`},
 		},
 		{
 			name: "copies of one export serving a kind do not make it orange",
@@ -550,46 +424,21 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
 				Exports: []pie.Export{coreExportAt("a/export.yaml"), coreExportAt("b/export.yaml")},
 				Schemas: []pie.Schema{widgetSchemaAt("a/widgets.yaml"), gadgetSchemaAt("a/gadgets.yaml")},
 			},
-			want: `"resources": {
-  label: "RESOURCES"
-  class: column
-  "group:core.example.io": {
+			has: []string{
+				`  "group:core.example.io": {
     label: "core.example.io"
     class: group
     "widgets.core.example.io": "Widget" {class: kind}
     "gadgets.core.example.io": "Gadget" {class: kind}
-  }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "apiexport:a/export.yaml#1": {
-    label: "core.example.io · a/export.yaml#1"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-  "apiexport:b/export.yaml#1": {
-    label: "core.example.io · b/export.yaml#1"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-}
-"apiexports"."apiexport:a/export.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:a/export.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:b/export.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:b/export.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}
-` + overviewLegend(legendServes, legendAPIGroup),
+  }`,
+				`"apiexports"."apiexport:a/export.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}`,
+				`"apiexports"."apiexport:b/export.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}`,
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := string(pie.RenderOverviewD2(tt.model)); got != overviewHead+tt.want {
-				t.Errorf("RenderOverviewD2() =\n%s\nwant\n%s", got, overviewHead+tt.want)
-			}
+			wantBlocks(t, string(pie.RenderOverviewD2(tt.model)), tt.has...)
 		})
 	}
 }
@@ -709,65 +558,80 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 	claim := func(group, resource string, verbs ...string) pie.Claim {
 		return pie.Claim{Group: group, Resource: resource, Verbs: verbs}
 	}
+	// readers has a reader claiming one kind of core and an admin claiming all of its kinds.
+	readers := pie.Model{
+		Exports: []pie.Export{
+			coreExportAt("ws/core.yaml"),
+			withClaims(pie.Export{Path: "ws/reader.yaml", Doc: 1, Name: "reader.example.io"}, claim("core.example.io", "widgets", "get", "list", "watch")),
+			withClaims(pie.Export{Path: "ws/admin.yaml", Doc: 1, Name: "admin.example.io"},
+				claim("core.example.io", "widgets", "*"), claim("core.example.io", "gadgets", "*")),
+		},
+		Schemas: []pie.Schema{widgetSchemaAt("ws/widgets.yaml"), gadgetSchemaAt("ws/gadgets.yaml")},
+	}
+	// weighted claims built-in resources with every reach, with and without a selector.
+	weighted := pie.Model{Exports: []pie.Export{withClaims(pie.Export{Path: "ws/core.yaml", Doc: 1, Name: "core.example.io"},
+		claim("", "configmaps", "get", "list", "watch"),
+		pie.Claim{Group: "", Resource: "secrets", Verbs: []string{"get", "create"}, Selected: true},
+		claim("", "serviceaccounts", "*"),
+		pie.Claim{Group: "", Resource: "events", Verbs: []string{"*"}, Selected: true},
+	)}}
+	// unserved claims resources no export in the tree serves, some by an export's identity.
+	unserved := pie.Model{
+		Exports: []pie.Export{
+			withClaims(pie.Export{Path: "ws/core.yaml", Doc: 1, Name: "core.example.io"},
+				pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}, FromExport: true},
+				pie.Claim{Group: "tenancy.kcp.io", Resource: "workspacetypes", Verbs: []string{"*"}, FromExport: true},
+				claim("apis.kcp.io", "apibindings", "*"),
+				pie.Claim{Group: "", Resource: "secrets", Verbs: []string{"get"}, Selected: true},
+				claim("", "configmaps", "get", "list"),
+				claim("rbac.authorization.k8s.io", "roles", "get", "create"),
+				claim("rbac.authorization.k8s.io", "rolebindings", "get", "create"),
+			),
+			withClaims(pie.Export{Path: "ws/other.yaml", Doc: 1, Name: "other.example.io"}, claim("", "configmaps", "watch")),
+		},
+	}
+	// stacked has a claimed box one arrow points into at a single resource, and one pointed at whole.
+	stacked := pie.Model{Exports: []pie.Export{
+		withClaims(pie.Export{Path: "ws/core.yaml", Doc: 1, Name: "core.example.io"},
+			pie.Claim{Group: "", Resource: "secrets", Verbs: []string{"get", "create"}, Selected: true},
+		),
+		withClaims(pie.Export{Path: "ws/providers.yaml", Doc: 1, Name: "providers.example.io"},
+			claim("", "secrets", "get", "create"),
+			claim("", "configmaps", "get", "create"),
+			claim("rbac.authorization.k8s.io", "roles", "get"),
+		),
+	}}
 	tests := []struct {
 		name  string
 		model pie.Model
-		want  string
+		has   []string
 	}{
 		{
-			name: "a claim on a kind the tree serves points at the kind, or at its group's box when the claims take all of it",
-			model: pie.Model{
-				Exports: []pie.Export{
-					coreExportAt("ws/core.yaml"),
-					withClaims(pie.Export{Path: "ws/reader.yaml", Doc: 1, Name: "reader.example.io"}, claim("core.example.io", "widgets", "get", "list", "watch")),
-					withClaims(pie.Export{Path: "ws/admin.yaml", Doc: 1, Name: "admin.example.io"},
-						claim("core.example.io", "widgets", "*"), claim("core.example.io", "gadgets", "*")),
-				},
-				Schemas: []pie.Schema{widgetSchemaAt("ws/widgets.yaml"), gadgetSchemaAt("ws/gadgets.yaml")},
+			name:  "a claim on a kind the tree serves points at the kind",
+			model: readers,
+			has: []string{
+				`"apiexports"."apiexport:ws/reader.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}`,
+				legendClaimsRead,
 			},
-			want: `"resources": {
-  label: "RESOURCES"
-  class: column
-  "group:core.example.io": {
-    label: "core.example.io"
-    class: group
-    "widgets.core.example.io": "Widget" {class: kind}
-    "gadgets.core.example.io": "Gadget" {class: kind}
-  }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "apiexport:ws/core.yaml#1": {
-    label: "core.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-  "apiexport:ws/reader.yaml#1": {
-    label: "reader.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "reads widgets from core.example.io\nmaximalPermissionPolicy: none" {class: story; height: 34}
-  }
-  "apiexport:ws/admin.yaml#1": {
-    label: "admin.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "all verbs on widgets, gadgets from core.example.io\nmaximalPermissionPolicy: none" {class: story; height: 34}
-  }
-}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:ws/reader.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-"apiexports"."apiexport:ws/admin.yaml#1" -> "resources"."group:core.example.io" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
-` + overviewLegend(legendServes, legendClaimsRead, legendClaimsAll, legendAPIGroup),
 		},
 		{
-			name: "an export's box says what it needs of the kinds other exports serve, a line per export and reach; claims on its own kinds add nothing",
+			name:  "claims taking every kind of a group point at the group's box",
+			model: readers,
+			has: []string{
+				`"apiexports"."apiexport:ws/admin.yaml#1" -> "resources"."group:core.example.io" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}`,
+				legendClaimsAll,
+			},
+		},
+		{
+			name:  "an export's story says what it needs of the kinds other exports serve, a line per export and reach",
+			model: readers,
+			has: []string{
+				`    "story": "reads widgets from core.example.io\nmaximalPermissionPolicy: none" {class: story; height: 34}`,
+				`    "story": "all verbs on widgets, gadgets from core.example.io\nmaximalPermissionPolicy: none" {class: story; height: 34}`,
+			},
+		},
+		{
+			name: "needs are a line per export and reach, and claims on an export's own kinds add nothing",
 			model: pie.Model{
 				Exports: []pie.Export{
 					coreExportAt("ws/core.yaml"),
@@ -779,108 +643,35 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 				},
 				Schemas: []pie.Schema{widgetSchemaAt("ws/widgets.yaml"), gadgetSchemaAt("ws/gadgets.yaml")},
 			},
-			want: `"resources": {
-  label: "RESOURCES"
-  class: column
-  "group:core.example.io": {
-    label: "core.example.io"
-    class: group
-    "widgets.core.example.io": "Widget" {class: kind}
-    "gadgets.core.example.io": "Gadget" {class: kind}
-  }
-  "group:terminal.example.io": {
-    label: "terminal.example.io"
-    class: group
-    "terminals.terminal.example.io": "terminals · not in tree" {class: kind}
-  }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "apiexport:ws/core.yaml#1": {
-    label: "core.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-  "apiexport:ws/terminal.yaml#1": {
-    label: "terminal.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "reads widgets from core.example.io\nwrites gadgets from core.example.io\nmaximalPermissionPolicy: none" {class: story; height: 51}
-  }
-}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:ws/terminal.yaml#1" -> "resources"."group:terminal.example.io"."terminals.terminal.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:ws/terminal.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-"apiexports"."apiexport:ws/terminal.yaml#1" -> "resources"."group:terminal.example.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-"apiexports"."apiexport:ws/terminal.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
-` + overviewLegend(legendServes, legendClaimsRead, legendClaimsWrite, legendAPIGroup),
-		},
-		{
-			name: "the more a claim lets the provider do, the heavier its arrow: read, write, all verbs, which the weight says alone; a selector does not lighten it and is named",
-			model: pie.Model{Exports: []pie.Export{withClaims(pie.Export{Path: "ws/core.yaml", Doc: 1, Name: "core.example.io"},
-				claim("", "configmaps", "get", "list", "watch"),
-				pie.Claim{Group: "", Resource: "secrets", Verbs: []string{"get", "create"}, Selected: true},
-				claim("", "serviceaccounts", "*"),
-				pie.Claim{Group: "", Resource: "events", Verbs: []string{"*"}, Selected: true},
-			)}},
-			want: `"resources": {
-  label: "RESOURCES"
-  class: column
-  "builtin": {
-    label: "built-in · in every workspace"
-    class: claimed
-    "group:": {
-      label: "core"
-      class: claimed
-      "configmaps": "configmaps" {class: claimed-resource}
-      "secrets": "secrets" {class: claimed-resource}
-      "serviceaccounts": "serviceaccounts" {class: claimed-resource}
-      "events": "events" {class: claimed-resource}
-    }
-  }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "apiexport:ws/core.yaml#1": {
-    label: "core.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."serviceaccounts" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."events": "defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
-` + overviewLegend(legendClaimsRead, legendClaimsWrite, legendClaimsAll, legendAPIGroup),
-		},
-		{
-			name: "what no export in the tree serves stands dashed, built in or from an export outside the tree as its claim names an identity or not",
-			model: pie.Model{
-				Exports: []pie.Export{
-					withClaims(pie.Export{Path: "ws/core.yaml", Doc: 1, Name: "core.example.io"},
-						pie.Claim{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}, FromExport: true},
-						pie.Claim{Group: "tenancy.kcp.io", Resource: "workspacetypes", Verbs: []string{"*"}, FromExport: true},
-						claim("apis.kcp.io", "apibindings", "*"),
-						pie.Claim{Group: "", Resource: "secrets", Verbs: []string{"get"}, Selected: true},
-						claim("", "configmaps", "get", "list"),
-						claim("rbac.authorization.k8s.io", "roles", "get", "create"),
-						claim("rbac.authorization.k8s.io", "rolebindings", "get", "create"),
-					),
-					withClaims(pie.Export{Path: "ws/other.yaml", Doc: 1, Name: "other.example.io"}, claim("", "configmaps", "watch")),
-				},
+			has: []string{
+				`    "story": "reads widgets from core.example.io\nwrites gadgets from core.example.io\nmaximalPermissionPolicy: none" {class: story; height: 51}`,
+				`"apiexports"."apiexport:ws/terminal.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}`,
+				`"apiexports"."apiexport:ws/terminal.yaml#1" -> "resources"."group:terminal.example.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}`,
+				`"apiexports"."apiexport:ws/terminal.yaml#1" -> "resources"."group:core.example.io"."gadgets.core.example.io": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}`,
 			},
-			want: `"resources": {
-  label: "RESOURCES"
-  class: column
-  "exported": {
+		},
+		{
+			name:  "the more a claim lets the provider do, the heavier its arrow: read, write, all verbs, which the weight says alone",
+			model: weighted,
+			has: []string{
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}`,
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."serviceaccounts" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}`,
+				legendClaimsRead, legendClaimsWrite, legendClaimsAll,
+			},
+		},
+		{
+			name:  "a selector does not lighten an arrow, and is named on it",
+			model: weighted,
+			has: []string{
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}`,
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."events": "defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}`,
+			},
+		},
+		{
+			name:  "a claim naming an export's identity is on a resource from an APIExport outside the tree, drawn dashed under that category",
+			model: unserved,
+			has: []string{
+				`  "exported": {
     label: "from an APIExport outside the tree"
     class: claimed
     "group:tenancy.kcp.io": {
@@ -891,8 +682,15 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
       "workspaces.tenancy.kcp.io": "workspaces" {class: claimed-resource}
       "workspacetypes.tenancy.kcp.io": "workspacetypes" {class: claimed-resource}
     }
-  }
-  "builtin": {
+  }`,
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."exported" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}`,
+			},
+		},
+		{
+			name:  "any other claim no export in the tree serves is on a built-in resource, by group, kcp's and Kubernetes' alike",
+			model: unserved,
+			has: []string{
+				`  "builtin": {
     label: "built-in · in every workspace"
     class: claimed
     "group:apis.kcp.io": {
@@ -916,89 +714,41 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
       "roles.rbac.authorization.k8s.io": "roles" {class: claimed-resource}
       "rolebindings.rbac.authorization.k8s.io": "rolebindings" {class: claimed-resource}
     }
-  }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "apiexport:ws/core.yaml#1": {
-    label: "core.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-  "apiexport:ws/other.yaml#1": {
-    label: "other.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."exported" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:apis.kcp.io" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "read · defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:rbac.authorization.k8s.io": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
-"apiexports"."apiexport:ws/other.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-` + overviewLegend(legendClaimsRead, legendClaimsWrite, legendClaimsAll, legendAPIGroup),
+  }`,
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:apis.kcp.io" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 6}`,
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "read · defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4}`,
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}`,
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:rbac.authorization.k8s.io": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}`,
+				`"apiexports"."apiexport:ws/other.yaml#1" -> "resources"."builtin"."group:"."configmaps": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}`,
+			},
 		},
 		{
-			name: "a claimed box an arrow points into, at one of its resources alone, stacks them, which d2 routes the arrow into; one pointed at whole keeps its row",
-			model: pie.Model{Exports: []pie.Export{
-				withClaims(pie.Export{Path: "ws/core.yaml", Doc: 1, Name: "core.example.io"},
-					pie.Claim{Group: "", Resource: "secrets", Verbs: []string{"get", "create"}, Selected: true},
-				),
-				withClaims(pie.Export{Path: "ws/providers.yaml", Doc: 1, Name: "providers.example.io"},
-					claim("", "secrets", "get", "create"),
-					claim("", "configmaps", "get", "create"),
-					claim("rbac.authorization.k8s.io", "roles", "get"),
-				),
-			}},
-			want: `"resources": {
-  label: "RESOURCES"
-  class: column
-  "builtin": {
-    label: "built-in · in every workspace"
-    class: claimed
-    "group:": {
+			name:  "a claimed box an arrow points into, at one of its resources alone, stacks them, which d2 routes the arrow into",
+			model: stacked,
+			has: []string{
+				`    "group:": {
       label: "core"
       class: claimed
       "secrets": "secrets" {class: claimed-resource}
       "configmaps": "configmaps" {class: claimed-resource}
-    }
-    "group:rbac.authorization.k8s.io": {
+    }`,
+				`"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}`,
+				`"apiexports"."apiexport:ws/providers.yaml#1" -> "resources"."builtin"."group:": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}`,
+			},
+		},
+		{
+			name:  "a claimed box pointed at whole keeps its resources in a row",
+			model: stacked,
+			has: []string{
+				`    "group:rbac.authorization.k8s.io": {
       label: "rbac.authorization.k8s.io"
       class: claimed
       grid-rows: 1
       grid-gap: 12
       "roles.rbac.authorization.k8s.io": "roles" {class: claimed-resource}
-    }
-  }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "apiexport:ws/core.yaml#1": {
-    label: "core.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-  "apiexport:ws/providers.yaml#1": {
-    label: "providers.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."builtin"."group:"."secrets": "write · defaultSelector" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
-"apiexports"."apiexport:ws/providers.yaml#1" -> "resources"."builtin"."group:": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
-"apiexports"."apiexport:ws/providers.yaml#1" -> "resources"."builtin"."group:rbac.authorization.k8s.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-` + overviewLegend(legendClaimsRead, legendClaimsWrite, legendAPIGroup),
+    }`,
+				`"apiexports"."apiexport:ws/providers.yaml#1" -> "resources"."builtin"."group:rbac.authorization.k8s.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}`,
+			},
 		},
 		{
 			name: "a claimed resource the tree does not serve, of a Kubernetes group it does serve, stands dashed in that group's box",
@@ -1008,37 +758,15 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 					withClaims(pie.Export{Path: "ws/other.yaml", Doc: 1, Name: "other.example.io"}, pie.Claim{Group: "gateway.networking.k8s.io", Resource: "httproutes", Verbs: []string{"get"}, FromExport: true}),
 				},
 			},
-			want: `"resources": {
-  label: "RESOURCES"
-  class: column
-  "group:gateway.networking.k8s.io": {
+			has: []string{
+				`  "group:gateway.networking.k8s.io": {
     label: "gateway.networking.k8s.io"
     class: group
     "gateways.gateway.networking.k8s.io": "gateways · not in tree" {class: kind}
     "httproutes.gateway.networking.k8s.io": "httproutes" {class: claimed-resource}
-  }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "apiexport:ws/gateway.yaml#1": {
-    label: "gateway.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-  "apiexport:ws/other.yaml#1": {
-    label: "other.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-}
-"apiexports"."apiexport:ws/gateway.yaml#1" -> "resources"."group:gateway.networking.k8s.io"."gateways.gateway.networking.k8s.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:ws/other.yaml#1" -> "resources"."group:gateway.networking.k8s.io"."httproutes.gateway.networking.k8s.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}
-` + overviewLegend(legendServes, legendClaimsRead, legendAPIGroup),
+  }`,
+				`"apiexports"."apiexport:ws/other.yaml#1" -> "resources"."group:gateway.networking.k8s.io"."httproutes.gateway.networking.k8s.io": "read" {style.stroke: "#7048e8"; style.stroke-dash: 4}`,
+			},
 		},
 		{
 			name: "a claimed resource the tree does not serve, of a group it does serve, stands dashed in that group's box",
@@ -1049,44 +777,20 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 				},
 				Schemas: []pie.Schema{widgetSchemaAt("ws/widgets.yaml")},
 			},
-			want: `"resources": {
-  label: "RESOURCES"
-  class: column
-  "group:core.example.io": {
+			has: []string{
+				`  "group:core.example.io": {
     label: "core.example.io"
     class: group
     "widgets.core.example.io": "Widget" {class: kind}
     "sprockets.core.example.io": "sprockets" {class: claimed-resource}
-  }
-}
-"apiexports": {
-  label: "APIEXPORTS"
-  class: column
-  "apiexport:ws/core.yaml#1": {
-    label: "core.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-  "apiexport:ws/other.yaml#1": {
-    label: "other.example.io"
-    class: export
-    grid-columns: 1
-    grid-gap: 0
-    "story": "maximalPermissionPolicy: none" {class: story; height: 17}
-  }
-}
-"apiexports"."apiexport:ws/core.yaml#1" -> "resources"."group:core.example.io"."widgets.core.example.io" {style.stroke: "#868e96"}
-"apiexports"."apiexport:ws/other.yaml#1" -> "resources"."group:core.example.io"."sprockets.core.example.io": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}
-` + overviewLegend(legendServes, legendClaimsWrite, legendAPIGroup),
+  }`,
+				`"apiexports"."apiexport:ws/other.yaml#1" -> "resources"."group:core.example.io"."sprockets.core.example.io": "write" {style.stroke: "#7048e8"; style.stroke-dash: 4; style.stroke-width: 4}`,
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := string(pie.RenderOverviewD2(tt.model)); got != overviewHead+tt.want {
-				t.Errorf("RenderOverviewD2() =\n%s\nwant\n%s", got, overviewHead+tt.want)
-			}
+			wantBlocks(t, string(pie.RenderOverviewD2(tt.model)), tt.has...)
 		})
 	}
 }
