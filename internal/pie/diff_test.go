@@ -6,7 +6,7 @@ import (
 	"github.com/bmarinov/apiexport-pie/internal/pie"
 )
 
-func TestRenderDiff(t *testing.T) {
+func TestDiff(t *testing.T) {
 	export := func(path, name string) pie.Export {
 		return pie.Export{Path: path, Doc: 1, Name: name}
 	}
@@ -44,7 +44,7 @@ added: APIExport new.example.io
 	}
 }
 
-func TestRenderDiffFollowsKindsAcrossExports(t *testing.T) {
+func TestDiffWhenKindsMoveBetweenExports(t *testing.T) {
 	things := pie.Resource{Group: "old.example.io", Name: "things", Schema: "v1.things.old.example.io"}
 	gizmos := pie.Resource{Group: "core.example.io", Name: "gizmos", Schema: "v1.gizmos.core.example.io"}
 	gizmoSchema := pie.Schema{Path: "pms/gizmos.yaml", Name: "v1.gizmos.core.example.io", Group: "core.example.io", Kind: "Gizmo", Plural: "gizmos"}
@@ -126,7 +126,7 @@ removed: notice: API group core.example.io is served by 2 APIExports: a.example.
 	}
 }
 
-func TestRenderDiffListsClaims(t *testing.T) {
+func TestDiffOfClaims(t *testing.T) {
 	claiming := func(path, name string, claims ...pie.Claim) pie.Export {
 		return pie.Export{Path: path, Doc: 1, Name: name, Claims: claims}
 	}
@@ -199,7 +199,7 @@ added: notice: APIExport core.example.io is bound by no WorkspaceType or APIBind
 	}
 }
 
-func TestRenderDiffListsConsumers(t *testing.T) {
+func TestDiffOfConsumers(t *testing.T) {
 	gizmos := pie.Resource{Group: "core.example.io", Name: "gizmos", Schema: "v1.gizmos.core.example.io"}
 	gizmoSchema := pie.Schema{Path: "pms/gizmos.yaml", Name: "v1.gizmos.core.example.io", Group: "core.example.io", Kind: "Gizmo", Plural: "gizmos"}
 	sprockets := pie.Resource{Group: "core.example.io", Name: "sprockets", Schema: "v1.sprockets.core.example.io"}
@@ -338,7 +338,7 @@ added: notice: API group core.example.io is served by 2 APIExports: core.example
 	}
 }
 
-func TestRenderDiffListsWarningsAndNotices(t *testing.T) {
+func TestDiffOfWarningsAndNotices(t *testing.T) {
 	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")}
 	panels := pie.Resource{Group: "ui.example.io", Name: "panels"}
 	bolts := pie.Resource{Group: "billing.example.io", Name: "bolts"}

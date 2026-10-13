@@ -8,9 +8,9 @@ import (
 	"github.com/bmarinov/apiexport-pie/internal/pie"
 )
 
-// TestRenderD2 pins whole diagrams: the order of tables, edges and legend. The other tests of the
+// TestClassic pins whole diagrams: the order of tables, edges and legend. The other tests of the
 // classic style assert only the parts each is about.
-func TestRenderD2(t *testing.T) {
+func TestClassic(t *testing.T) {
 	tests := []struct {
 		name  string
 		model pie.Model
@@ -113,7 +113,7 @@ func TestRenderD2(t *testing.T) {
 	}
 }
 
-func TestRenderD2DrawsExports(t *testing.T) {
+func TestClassicOfExports(t *testing.T) {
 	tests := []struct {
 		name  string
 		model pie.Model
@@ -291,7 +291,7 @@ func TestRenderD2DrawsExports(t *testing.T) {
 	}
 }
 
-func TestRenderD2DrawsConsumers(t *testing.T) {
+func TestClassicOfConsumers(t *testing.T) {
 	coreHere := pie.Export{Path: "pms/export.yaml", Doc: 1, Name: "core.example.io"}
 	tests := []struct {
 		name  string
@@ -494,7 +494,7 @@ func TestRenderD2DrawsConsumers(t *testing.T) {
 	}
 }
 
-func TestRenderD2DrawsClaims(t *testing.T) {
+func TestClassicOfClaims(t *testing.T) {
 	infos := pie.Resource{Group: "core.example.io", Name: "accountinfos", Schema: "v1.accountinfos.core.example.io"}
 	infosSchema := pie.Schema{Path: "pms/infos.yaml", Name: "v1.accountinfos.core.example.io", Group: "core.example.io", Kind: "AccountInfo", Plural: "accountinfos"}
 	readInfos := pie.Claim{Group: "core.example.io", Resource: "accountinfos", Verbs: []string{"get", "list", "watch"}}
@@ -568,7 +568,7 @@ func TestRenderD2DrawsClaims(t *testing.T) {
 	}
 }
 
-func TestRenderD2FlagsBindingsKcpRefuses(t *testing.T) {
+func TestClassicOfBindingsKcpRefuses(t *testing.T) {
 	tests := []struct {
 		name  string
 		model pie.Model
@@ -678,7 +678,7 @@ func TestRenderD2FlagsBindingsKcpRefuses(t *testing.T) {
 	}
 }
 
-func TestRenderD2ComparesNamesAsKcpDoes(t *testing.T) {
+func TestClassicOfResourcesSharingNames(t *testing.T) {
 	widgets := func(s *pie.Schema) {}
 	gizmos := func(change func(s *pie.Schema)) func(s *pie.Schema) {
 		return func(s *pie.Schema) {
@@ -744,7 +744,7 @@ func TestRenderD2ComparesNamesAsKcpDoes(t *testing.T) {
 	}
 }
 
-func TestRenderD2GroupsExportsByWorkspace(t *testing.T) {
+func TestClassicOfExportsByWorkspace(t *testing.T) {
 	core := pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io"}
 	account := func(binds ...pie.ExportRef) []pie.WorkspaceType {
 		return []pie.WorkspaceType{{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: binds}}
@@ -821,7 +821,7 @@ func TestRenderD2GroupsExportsByWorkspace(t *testing.T) {
 	}
 }
 
-func TestRenderD2ExplainsTheRelationsItDraws(t *testing.T) {
+func TestClassicLegend(t *testing.T) {
 	t.Run("the legend lists relations in a fixed order, whichever is drawn first", func(t *testing.T) {
 		model := pie.Model{WorkspaceTypes: []pie.WorkspaceType{
 			{Path: "types/account.yaml", Doc: 1, Name: "account", Extends: []pie.TypeRef{{Name: "base"}}},

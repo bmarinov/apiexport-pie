@@ -357,7 +357,7 @@ func TestScan(t *testing.T) {
 	}
 }
 
-func TestScanCleansUpTemplates(t *testing.T) {
+func TestScanOfTemplatedManifests(t *testing.T) {
 	const exportHead = `apiVersion: apis.kcp.io/v1alpha2
 kind: APIExport
 metadata:
@@ -486,7 +486,7 @@ spec:
 	}
 }
 
-func TestScanSaysWhyADocumentIsNotDrawn(t *testing.T) {
+func TestScanOfDocumentsItDoesNotDraw(t *testing.T) {
 	tests := []struct {
 		name       string
 		manifest   string
@@ -541,7 +541,7 @@ func TestScanSaysWhyADocumentIsNotDrawn(t *testing.T) {
 	}
 }
 
-func TestDiagnosticNamesTheDocumentAndTheReason(t *testing.T) {
+func TestDiagnosticString(t *testing.T) {
 	tests := []struct {
 		diag pie.Diagnostic
 		want string
@@ -564,7 +564,7 @@ func TestDiagnosticNamesTheDocumentAndTheReason(t *testing.T) {
 	}
 }
 
-func TestScanReportsWhatItCannotRead(t *testing.T) {
+func TestScanOfAnUnreadableTree(t *testing.T) {
 	tests := []struct {
 		name       string
 		unreadable string

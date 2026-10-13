@@ -8,7 +8,7 @@ import (
 	"github.com/bmarinov/apiexport-pie/internal/pie"
 )
 
-func TestRenderOverviewDiffD2WrapsTagsToTheTitle(t *testing.T) {
+func TestOverviewDiffWithLongKindNames(t *testing.T) {
 	serving := func(plurals ...string) pie.Model {
 		e := pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io"}
 		for _, p := range plurals {
@@ -34,7 +34,7 @@ func TestRenderOverviewDiffD2WrapsTagsToTheTitle(t *testing.T) {
 	}
 }
 
-func TestRenderOverviewDiffD2SaysWhatWorkspacesATypeAlreadyHasGet(t *testing.T) {
+func TestOverviewDiffWhenATypeChangesItsBindings(t *testing.T) {
 	core := pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io"}
 	fga := pie.Export{Path: "pms/fga.yaml", Doc: 1, Name: "fga.example.io"}
 	wt := func(name string, exports ...string) pie.WorkspaceType {
@@ -136,7 +136,7 @@ func TestRenderOverviewDiffD2SaysWhatWorkspacesATypeAlreadyHasGet(t *testing.T) 
 	}
 }
 
-func TestRenderOverviewDiffD2SaysWhatAnExportKeepsServingToItsBindings(t *testing.T) {
+func TestOverviewDiffWhenAnExportStopsServingKinds(t *testing.T) {
 	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")}
 	things := pie.Resource{Group: "core.example.io", Name: "things"}
 	export := func(name string, resources ...pie.Resource) pie.Export {
@@ -197,7 +197,7 @@ func TestRenderOverviewDiffD2SaysWhatAnExportKeepsServingToItsBindings(t *testin
 	}
 }
 
-func TestRenderOverviewDiffD2NamesExportsOutsideTheTreeOnAConsumerWithTags(t *testing.T) {
+func TestOverviewDiffOfAConsumerBindingOutsideTheTree(t *testing.T) {
 	core := func(resources ...pie.Resource) pie.Export {
 		return pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: resources}
 	}
@@ -219,61 +219,43 @@ func TestRenderOverviewDiffD2NamesExportsOutsideTheTreeOnAConsumerWithTags(t *te
 	}
 }
 
-func TestRenderOverviewDiffD2MarksWhatAnExportLeavesOpenAsItChanges(t *testing.T) {
+func TestOverviewDiffOfAnExportsPolicyAndWarnings(t *testing.T) {
 	core := coreExportAt("pms/core.yaml")
+	local := core
+	local.MaximalPermissionPolicy = "local"
 	tests := []struct {
 		name string
 		a, b pie.Model
-		want string
+		has  string
 	}{
 		{
-			name: "a policy B sets is marked as the other lines of the box are",
+			name: "B sets a maximal permission policy A did not",
 			a:    pie.Model{Exports: []pie.Export{core}},
-			b: pie.Model{Exports: []pie.Export{func() pie.Export {
-				e := core
-				e.MaximalPermissionPolicy = "local"
-				return e
-			}()}},
-			want: "+maximalPermissionPolicy: local\n−maximalPermissionPolicy: none",
+			b:    pie.Model{Exports: []pie.Export{local}},
+			has:  `    "story": "+maximalPermissionPolicy: local\n−maximalPermissionPolicy: none" {class: story; height: 34}`,
 		},
-	}
-	warnings := []struct {
-		name string
-		a, b pie.Model
-		want string
-	}{
 		{
-			name: "a warning only A has is marked gone, in its orange line",
+			name: "only A has the v1alpha1 warning",
 			a:    pie.Model{Exports: []pie.Export{withV1alpha1(core)}},
 			b:    pie.Model{Exports: []pie.Export{core}},
-			want: `"warnings": "−! apis.kcp.io/v1alpha1 is deprecated" {class: warning; height: 17}`,
+			has:  `    "warnings": "−! apis.kcp.io/v1alpha1 is deprecated" {class: warning; height: 17}`,
 		},
 		{
-			name: "one only B has is marked new",
+			name: "only B has the v1alpha1 warning",
 			a:    pie.Model{Exports: []pie.Export{core}},
 			b:    pie.Model{Exports: []pie.Export{withV1alpha1(core)}},
-			want: `"warnings": "+! apis.kcp.io/v1alpha1 is deprecated" {class: warning; height: 17}`,
+			has:  `    "warnings": "+! apis.kcp.io/v1alpha1 is deprecated" {class: warning; height: 17}`,
 		},
 		{
-			name: "a warning on two rows is marked once, on its first",
+			name: "only B has a warning that takes two rows",
 			a:    pie.Model{Exports: []pie.Export{core}},
 			b:    pie.Model{Exports: []pie.Export{withV1alpha1(withClaims(core, pie.Claim{Resource: "secrets", Verbs: []string{"*"}}))}},
-			want: `"warnings": "+! apis.kcp.io/v1alpha1 is deprecated\n→ claims get verbs *" {class: warning; height: 34}`,
+			has:  `    "warnings": "+! apis.kcp.io/v1alpha1 is deprecated\n→ claims get verbs *" {class: warning; height: 34}`,
 		},
-	}
-	for _, tt := range warnings {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := string(pie.RenderOverviewDiffD2(tt.a, tt.b)); !strings.Contains(got, tt.want) {
-				t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, tt.want)
-			}
-		})
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := string(pie.RenderOverviewDiffD2(tt.a, tt.b))
-			if want := fmt.Sprintf("\"story\": %q {class: story;", tt.want); !strings.Contains(got, want) {
-				t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, want)
-			}
+			wantBlocks(t, string(pie.RenderOverviewDiffD2(tt.a, tt.b)), tt.has)
 		})
 	}
 }
@@ -289,9 +271,9 @@ const (
 `
 )
 
-// TestRenderOverviewDiffD2 pins whole diffs: how both trees merge into one overview, in B's
+// TestOverviewDiff pins whole diffs: how both trees merge into one overview, in B's
 // order then A's. The other tests of the diff assert only the parts each is about.
-func TestRenderOverviewDiffD2(t *testing.T) {
+func TestOverviewDiff(t *testing.T) {
 	widgetsGroup := func(kinds ...string) string {
 		return "\"resources\": {\n  label: \"RESOURCES\"\n  class: column\n  \"group:core.example.io\": {\n    label: \"core.example.io\"\n    class: group\n" + strings.Join(kinds, "") + "  }\n"
 	}
@@ -393,7 +375,7 @@ func TestRenderOverviewDiffD2(t *testing.T) {
 	}
 }
 
-func TestRenderOverviewDiffD2ColoursWhatOnlyOneTreeHas(t *testing.T) {
+func TestOverviewDiffWhenOneTreeHasMore(t *testing.T) {
 	panels := pie.Resource{Group: "ui.example.io", Name: "panels"}
 	// gone has, in A only, a WorkspaceType binding an export of its own group.
 	gone := [2]pie.Model{
@@ -600,7 +582,7 @@ func TestRenderOverviewDiffD2ColoursWhatOnlyOneTreeHas(t *testing.T) {
 	}
 }
 
-func TestRenderOverviewDiffD2TagsConsumersWhoseKindsChange(t *testing.T) {
+func TestOverviewDiffWhenKindsMoveBetweenExports(t *testing.T) {
 	// changed is a consumer of both trees whose kinds change, its title bold over a tag per direction.
 	changed := func(id, title, class string, tags ...string) string {
 		return fmt.Sprintf("  %q: {\n    label: %q\n    class: %s\n    style.bold: true\n    grid-columns: 1\n    grid-gap: 4\n%s  }\n", id, title, class, strings.Join(tags, ""))
@@ -692,7 +674,7 @@ func TestRenderOverviewDiffD2TagsConsumersWhoseKindsChange(t *testing.T) {
 	}
 }
 
-func TestRenderOverviewDiffD2MarksTheStoryOfAnExportBothTreesHave(t *testing.T) {
+func TestOverviewDiffWhenBindersAndClaimsChange(t *testing.T) {
 	// Between a and b, team and a second binding directory start binding core, org stops, and the
 	// reader's claim grows from get to create.
 	a := pie.Model{

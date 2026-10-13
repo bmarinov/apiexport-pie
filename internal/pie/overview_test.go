@@ -8,9 +8,9 @@ import (
 	"github.com/bmarinov/apiexport-pie/internal/pie"
 )
 
-// TestRenderOverviewD2 pins whole overviews: the order of columns, boxes, edges and legend. The
+// TestOverview pins whole overviews: the order of columns, boxes, edges and legend. The
 // other tests of the overview assert only the parts each is about.
-func TestRenderOverviewD2(t *testing.T) {
+func TestOverview(t *testing.T) {
 	core := pie.Export{Path: "pms/export.yaml", Doc: 1, Name: "core.example.io"}
 	tests := []struct {
 		name  string
@@ -146,7 +146,7 @@ func TestRenderOverviewD2(t *testing.T) {
 	}
 }
 
-func TestRenderOverviewD2DrawsConsumers(t *testing.T) {
+func TestOverviewOfConsumers(t *testing.T) {
 	core := pie.Export{Path: "pms/export.yaml", Doc: 1, Name: "core.example.io"}
 	// placed has exports the references to it agree on, disagree on, and say nothing about.
 	placed := pie.Model{
@@ -352,7 +352,7 @@ func TestRenderOverviewD2DrawsConsumers(t *testing.T) {
 	}
 }
 
-func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
+func TestOverviewOfKinds(t *testing.T) {
 	uiResource := pie.Resource{Group: "ui.example.io", Name: "panels", Schema: "v1.panels.ui.example.io"}
 	panelSchema := pie.Schema{Path: "ws/panels.yaml", Name: "v1.panels.ui.example.io", Group: "ui.example.io", Kind: "Panel", Plural: "panels"}
 	tests := []struct {
@@ -443,7 +443,7 @@ func TestRenderOverviewD2DrawsTheKindsExportsServe(t *testing.T) {
 	}
 }
 
-func TestRenderOverviewD2SaysWhatAnExportLeavesOpen(t *testing.T) {
+func TestOverviewOfMaximalPermissionPolicies(t *testing.T) {
 	core := coreExportAt("pms/core.yaml")
 	terminal := pie.Export{Path: "pms/terminal.yaml", Doc: 1, Name: "terminal.example.io"}
 	allOfWidgets := pie.Claim{Group: "core.example.io", Resource: "widgets", Verbs: []string{"*"}}
@@ -486,7 +486,7 @@ func TestRenderOverviewD2SaysWhatAnExportLeavesOpen(t *testing.T) {
 	}
 }
 
-func TestRenderOverviewD2WarnsOnTheExportBox(t *testing.T) {
+func TestOverviewOfExportsWithWarnings(t *testing.T) {
 	system := pie.Export{Path: "pms/system.yaml", Doc: 1, Name: "system.example.io"}
 	account := pie.WorkspaceType{Path: "types/account.yaml", Doc: 1, Name: "account", Binds: []pie.ExportRef{{Path: "root:pms", Name: "system.example.io"}}}
 	tests := []struct {
@@ -554,7 +554,7 @@ func TestRenderOverviewD2WarnsOnTheExportBox(t *testing.T) {
 	}
 }
 
-func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
+func TestOverviewOfClaims(t *testing.T) {
 	claim := func(group, resource string, verbs ...string) pie.Claim {
 		return pie.Claim{Group: group, Resource: resource, Verbs: verbs}
 	}
@@ -795,7 +795,7 @@ func TestRenderOverviewD2DrawsWhatClaimsReach(t *testing.T) {
 	}
 }
 
-func TestRenderOverviewD2PlacesConsumersInTheWorkspaceTree(t *testing.T) {
+func TestOverviewOfTheWorkspaceTree(t *testing.T) {
 	typ := func(name string, parents, children []string, extends ...string) pie.WorkspaceType {
 		wt := pie.WorkspaceType{Path: "types/" + name + ".yaml", Doc: 1, Name: name}
 		for _, p := range parents {

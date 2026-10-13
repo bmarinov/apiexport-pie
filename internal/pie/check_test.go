@@ -8,7 +8,7 @@ import (
 	"github.com/bmarinov/apiexport-pie/internal/pie"
 )
 
-func TestCheckWarnsAboutBindingsKcpRefuses(t *testing.T) {
+func TestCheckOfBindingsKcpRefuses(t *testing.T) {
 	exportOf := func(path, name string, resources ...pie.Resource) pie.Export {
 		return pie.Export{Path: path, Doc: 1, Name: name, Resources: resources}
 	}
@@ -103,7 +103,7 @@ func TestCheckWarnsAboutBindingsKcpRefuses(t *testing.T) {
 	}
 }
 
-func TestCheckWarnsAboutAPIExportsAsWritten(t *testing.T) {
+func TestCheckOfHowExportsAreWritten(t *testing.T) {
 	widgetsOfAll := pie.Claim{Group: "core.example.io", Resource: "widgets", Verbs: []string{"*"}}
 	core := pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource(), gadgetResource()}}
 	ui := pie.Export{Path: "pms/ui.yaml", Doc: 1, Name: "ui.example.io", Resources: []pie.Resource{{Group: "ui.example.io", Name: "panels"}}}
@@ -190,7 +190,7 @@ func TestCheckWarnsAboutAPIExportsAsWritten(t *testing.T) {
 	}
 }
 
-func TestCheckPointsOutWhatIsWorthALook(t *testing.T) {
+func TestCheckOfHowAPIsAreCut(t *testing.T) {
 	panels := pie.Resource{Group: "ui.example.io", Name: "panels", Schema: "v1.panels.ui.example.io"}
 	core := pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource()}}
 	typeBinding := func(name string, refs ...pie.ExportRef) pie.WorkspaceType {
@@ -295,7 +295,7 @@ func TestCheckPointsOutWhatIsWorthALook(t *testing.T) {
 	}
 }
 
-func TestCheckPointsOutWhereClaimsReach(t *testing.T) {
+func TestCheckOfWhereClaimsReach(t *testing.T) {
 	export := func(name string, resources []pie.Resource, claims ...pie.Claim) pie.Export {
 		return pie.Export{Path: "pms/" + name + ".yaml", Doc: 1, Name: name, Resources: resources, Claims: claims}
 	}

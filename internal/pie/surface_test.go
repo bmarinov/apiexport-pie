@@ -8,7 +8,7 @@ import (
 	"github.com/bmarinov/apiexport-pie/internal/pie"
 )
 
-func TestRenderSurfaceListsWarningsOverNotices(t *testing.T) {
+func TestSurfaceWithWarningsAndNotices(t *testing.T) {
 	model := pie.Model{
 		Exports: []pie.Export{withV1alpha1(pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource()}})},
 		Schemas: []pie.Schema{widgetSchemaAt("pms/widgets.yaml")},
@@ -34,7 +34,7 @@ func TestRenderSurfaceListsWarningsOverNotices(t *testing.T) {
 	}
 }
 
-func TestRenderSurfaceListsNoticesUnderTheTable(t *testing.T) {
+func TestSurfaceWithNoticesOnly(t *testing.T) {
 	model := pie.Model{
 		Exports: []pie.Export{{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource()}}},
 		Schemas: []pie.Schema{widgetSchemaAt("pms/widgets.yaml")},
@@ -56,7 +56,7 @@ func TestRenderSurfaceListsNoticesUnderTheTable(t *testing.T) {
 	}
 }
 
-func TestRenderSurface(t *testing.T) {
+func TestSurface(t *testing.T) {
 	core := pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource(), gadgetResource()}}
 	bindsInPMS := func(names ...string) []pie.ExportRef {
 		var refs []pie.ExportRef
@@ -167,7 +167,7 @@ func TestRenderSurface(t *testing.T) {
 	}
 }
 
-func TestRenderSurfaceNamesTheGroupOfAKindThatIsNotTheExportsOwn(t *testing.T) {
+func TestSurfaceOfKindsOutsideTheExportsGroup(t *testing.T) {
 	model := pie.Model{
 		Exports: []pie.Export{
 			{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{
@@ -203,7 +203,7 @@ func TestRenderSurfaceNamesTheGroupOfAKindThatIsNotTheExportsOwn(t *testing.T) {
 	}
 }
 
-func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
+func TestSurfaceOfClaims(t *testing.T) {
 	coreClaiming := func(claims ...pie.Claim) pie.Export {
 		return pie.Export{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource(), gadgetResource()}, Claims: claims}
 	}
@@ -306,7 +306,7 @@ func TestRenderSurfaceShowsWhatABindingGrants(t *testing.T) {
 	}
 }
 
-func TestRenderSurfaceKeepsGrantsLinesToSixtyCharacters(t *testing.T) {
+func TestSurfaceOfLongClaims(t *testing.T) {
 	c, d := strings.Repeat("c", 22), strings.Repeat("d", 22)
 	tests := []struct {
 		name   string
@@ -337,7 +337,7 @@ func TestRenderSurfaceKeepsGrantsLinesToSixtyCharacters(t *testing.T) {
 	}
 }
 
-func TestRenderSurfaceD2DrawsTheTableAsAGridOfCells(t *testing.T) {
+func TestSurfaceD2(t *testing.T) {
 	model := pie.Model{
 		Exports: []pie.Export{{Path: "pms/core.yaml", Doc: 1, Name: "core.example.io", Resources: []pie.Resource{widgetResource(), gadgetResource()},
 			Claims: []pie.Claim{{Group: "tenancy.kcp.io", Resource: "workspaces", Verbs: []string{"*"}}}}},
@@ -379,7 +379,7 @@ grid-gap: 0
 	}
 }
 
-func TestRenderSurfaceD2ShadesEveryOtherExportWhole(t *testing.T) {
+func TestSurfaceD2OfSeveralExports(t *testing.T) {
 	export := func(name string, claims ...pie.Claim) pie.Export {
 		return pie.Export{Path: "pms/" + name + ".yaml", Doc: 1, Name: name, Claims: claims}
 	}
@@ -403,7 +403,7 @@ func TestRenderSurfaceD2ShadesEveryOtherExportWhole(t *testing.T) {
 }
 
 // d2 centres every line of a label, so a claim that wraps is a cell of one-line children, each on the left.
-func TestRenderSurfaceD2KeepsTheLinesOfAWrappedClaimOnTheLeft(t *testing.T) {
+func TestSurfaceD2OfAWrappedClaim(t *testing.T) {
 	c, d := strings.Repeat("c", 22), strings.Repeat("d", 22)
 	model := pie.Model{Exports: []pie.Export{
 		{Path: "pms/a.yaml", Doc: 1, Name: "a.example.io"},
@@ -427,7 +427,7 @@ func TestRenderSurfaceD2KeepsTheLinesOfAWrappedClaimOnTheLeft(t *testing.T) {
 	}
 }
 
-func TestRenderSurfaceD2TintsTheClaimsThatCanWrite(t *testing.T) {
+func TestSurfaceD2OfClaimsThatWrite(t *testing.T) {
 	c, d := strings.Repeat("c", 22), strings.Repeat("d", 22)
 	readOnly := pie.Export{Path: "pms/a.yaml", Doc: 1, Name: "a.example.io", Claims: []pie.Claim{{Resource: "configmaps", Verbs: []string{"get", "list", "watch"}}}}
 	line := `{style.stroke: transparent; style.fill: transparent; style.font-size: 14; style.bold: false; label.near: center-left; height: 20}`
@@ -490,7 +490,7 @@ func TestRenderSurfaceD2TintsTheClaimsThatCanWrite(t *testing.T) {
 	}
 }
 
-func TestRenderSurfaceDiffD2(t *testing.T) {
+func TestSurfaceDiff(t *testing.T) {
 	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")}
 	export := func(name string, resources []pie.Resource, claims ...pie.Claim) pie.Export {
 		return pie.Export{Path: "pms/" + name + ".yaml", Doc: 1, Name: name, Resources: resources, Claims: claims}
