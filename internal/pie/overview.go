@@ -579,18 +579,26 @@ func openOf(e Export) []string {
 	return []string{"maximalPermissionPolicy: " + policy}
 }
 
-// warningLines are what is wrong with an export as written, as its box says it.
+// warningLines are what is wrong with an export as written, as its box says it: a warning's first
+// row says what is wrong, and what follows from it goes on a second behind an arrow, as the whole
+// reason is wider than the box d2 measures for bold text. A warning stays one entry, so a diff marks
+// it once.
 func warningLines(warnings []exportWarning) []string {
 	var lines []string
 	for _, w := range warnings {
-		lines = append(lines, "! "+w.reason)
+		line := "! " + w.reason
+		if what, follows, found := strings.Cut(w.reason, "; "); found {
+			line = "! " + what + "\n→ " + follows
+		}
+		lines = append(lines, line)
 	}
 	return lines
 }
 
-// writeCell writes lines as a cell of an export box's grid, as tall as the lines.
+// writeCell writes lines as a cell of an export box's grid, as tall as its rows.
 func writeCell(b *bytes.Buffer, key, class string, lines []string) {
-	fmt.Fprintf(b, "    %q: %q {class: %s; height: %d}\n", key, strings.Join(lines, "\n"), class, lineHeight*len(lines))
+	text := strings.Join(lines, "\n")
+	fmt.Fprintf(b, "    %q: %q {class: %s; height: %d}\n", key, text, class, lineHeight*(strings.Count(text, "\n")+1))
 }
 
 // needWords say what a claim lets the provider do, by the relation its arrow is drawn in.

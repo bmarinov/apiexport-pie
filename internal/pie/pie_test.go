@@ -4448,15 +4448,15 @@ func TestRenderOverviewD2WarnsOnTheExportBox(t *testing.T) {
     grid-columns: 1
     grid-gap: 0
     "story": "bound at account\nmaximalPermissionPolicy: none" {class: story; height: 34}
-    "warnings": "! apis.kcp.io/v1alpha1 is deprecated; claims get verbs *" {class: warning; height: 17}
+    "warnings": "! apis.kcp.io/v1alpha1 is deprecated\n→ claims get verbs *" {class: warning; height: 34}
   }
 `,
 		},
 		{
-			name: "a line per warning, so a claim with a literal identity hash of an export whose identity kcp generates is one more",
+			name: "a warning starts a line, and what follows from it takes the next behind an arrow, so a claim with a literal identity hash of an export whose identity kcp generates is two more",
 			model: pie.Model{Exports: []pie.Export{coreExportAt("pms/core.yaml"),
 				withV1alpha1(withClaims(system, pie.Claim{Group: "core.example.io", Resource: "widgets", Verbs: []string{"get"}, FromExport: true, LiteralHash: true}))}},
-			want: `    "warnings": "! apis.kcp.io/v1alpha1 is deprecated; claims get verbs *\n! identityHash for widgets is a literal; core.example.io's identity differs per installation" {class: warning; height: 34}`,
+			want: `    "warnings": "! apis.kcp.io/v1alpha1 is deprecated\n→ claims get verbs *\n! identityHash for widgets is a literal\n→ core.example.io's identity differs per installation" {class: warning; height: 68}`,
 		},
 		{
 			name: "an export in a later document of its file has its own warnings",
@@ -4555,6 +4555,12 @@ func TestRenderOverviewDiffD2MarksWhatAnExportLeavesOpenAsItChanges(t *testing.T
 			a:    pie.Model{Exports: []pie.Export{core}},
 			b:    pie.Model{Exports: []pie.Export{withV1alpha1(core)}},
 			want: `"warnings": "+! apis.kcp.io/v1alpha1 is deprecated" {class: warning; height: 17}`,
+		},
+		{
+			name: "a warning on two rows is marked once, on its first",
+			a:    pie.Model{Exports: []pie.Export{core}},
+			b:    pie.Model{Exports: []pie.Export{withV1alpha1(withClaims(core, pie.Claim{Resource: "secrets", Verbs: []string{"*"}}))}},
+			want: `"warnings": "+! apis.kcp.io/v1alpha1 is deprecated\n→ claims get verbs *" {class: warning; height: 34}`,
 		},
 	}
 	for _, tt := range warnings {
