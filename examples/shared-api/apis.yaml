@@ -1,0 +1,38 @@
+# Two providers serve the same Database API. team and analytics bind one each.
+apiVersion: apis.kcp.io/v1alpha2
+kind: APIExport
+metadata: {name: postgres.example.io}
+spec:
+  resources:
+  - {group: sql.example.io, name: databases, schema: v1.databases.sql.example.io, storage: {crd: {}}}
+  permissionClaims:
+  - group: ""
+    resource: secrets
+    verbs: [get, create, update, delete]
+    defaultSelector: {labelSelector: {matchLabels: {sql.example.io/connection: "true"}}}
+---
+apiVersion: apis.kcp.io/v1alpha2
+kind: APIExport
+metadata: {name: mysql.example.io}
+spec:
+  resources:
+  - {group: sql.example.io, name: databases, schema: v1.databases.sql.example.io, storage: {crd: {}}}
+---
+apiVersion: apis.kcp.io/v1alpha1
+kind: APIResourceSchema
+metadata: {name: v1.databases.sql.example.io}
+spec: {group: sql.example.io, names: {kind: Database, plural: databases}, scope: Namespaced}
+---
+apiVersion: tenancy.kcp.io/v1alpha1
+kind: WorkspaceType
+metadata: {name: team}
+spec:
+  defaultAPIBindings:
+  - {path: "root:providers", export: postgres.example.io}
+---
+apiVersion: tenancy.kcp.io/v1alpha1
+kind: WorkspaceType
+metadata: {name: analytics}
+spec:
+  defaultAPIBindings:
+  - {path: "root:providers", export: mysql.example.io}

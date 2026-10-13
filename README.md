@@ -10,6 +10,8 @@ The outputs show which kinds ship together in an APIExport, and the workspaces b
 `--diff` compares two versions of a tree: a PR branch against main, or one release tag against the
 next.
 
+For the output types in detail and the kcp concepts behind them, see [MANUAL.md](MANUAL.md).
+
 ### APIExports
 
 kcp [APIExports](https://docs.kcp.io/kcp/v0.33/reference/crd/apis.kcp.io/apiexports/) are effectively API definitions described through resource schemas and the permissions a provider serving the API may claim.
@@ -19,12 +21,15 @@ Since this means a lot of YAML, reading complex APIs or reviewing changes is men
 ## Install
 
 ```sh
-go build .
+go install github.com/bmarinov/apiexport-pie@latest
 ```
+
+`apiexport-pie --version` prints the version installed.
 
 ### Dependencies
 
-Drawing images requires [d2](https://d2lang.com) on PATH. A git ref as a tree needs git.
+Drawing images requires [d2](https://d2lang.com) on PATH; the examples are drawn with d2 v0.6.9.
+A git ref as a tree needs git.
 
 ### Tests
 
@@ -41,6 +46,7 @@ The integration tests draw with d2, and verify `root` and `root:universal` assum
 apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] TREE
 apiexport-pie [-v] --surface [-o FILE [--watch]] TREE
 apiexport-pie [-v] --diff [--surface|--style overview [-o FILE]] A B
+apiexport-pie --version
 ```
 
 TREE, A and B are each a directory of manifests or `[REMOTE#]REF:PATH`: PATH at commit REF of this
@@ -57,6 +63,7 @@ repository, or of REMOTE (a remote name, URL or path). `--watch` needs a directo
 | `--watch` | With `-o FILE.d2`: rewrite FILE when a manifest changes and show it with `d2 --watch`. Not with `--diff`. |
 | `-v` | Also list the documents that are not drawn. |
 | `-h` | Usage and flags. |
+| `--version` | The version installed. |
 
 | `-o` FILE ends in | Output |
 |---|---|
@@ -73,6 +80,24 @@ repository, or of REMOTE (a remote name, URL or path). `--watch` needs a directo
 - **diff**: `added:`, `removed:`, `moved:`, `changed:` lines for exports, kinds, claims, consumers and APIBindings.
 
 Warnings and notices are printed to stderr. Any kind in more than one APIExport is flagged with orange.
+
+### Example
+
+[examples/shared-api-conflict/apis.yaml](examples/shared-api-conflict/apis.yaml) holds two
+APIExports serving the same `Database` kind. One WorkspaceType binds two of them which kcp will refuse.
+
+```sh
+apiexport-pie --style overview -o overview.svg examples/shared-api-conflict
+```
+
+![Two APIExports serving one Database kind, and the WorkspaceTypes binding them](examples/shared-api-conflict/overview.svg)
+
+On stderr:
+
+```
+warning: apis.yaml#6: WorkspaceType playground binds postgres.example.io and mysql.example.io, which both serve databases.sql.example.io; kcp binds only one of them
+notice: apis.yaml#2: API group sql.example.io is served by 2 APIExports: postgres.example.io, mysql.example.io
+```
 
 ## Disclaimer on LLM use
 

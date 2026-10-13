@@ -10,3 +10,4 @@
 !/examples/**/*.svg
 !/.gitignore
 !/.github/**/*.yaml
+!/examples/generate.sh

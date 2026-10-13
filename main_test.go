@@ -56,7 +56,7 @@ metadata:
 spec: not-a-map
 `
 
-const usageLine = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --surface [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --diff [--surface|--style overview [-o FILE]] A B"
+const usageLine = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --surface [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --diff [--surface|--style overview [-o FILE]] A B\n       apiexport-pie --version"
 
 func TestDiffReadsTreesFromGit(t *testing.T) {
 	other := strings.Replace(exportManifest, "name: core.example.io", "name: other.example.io", 1)
@@ -585,6 +585,17 @@ spec:
 
 		if code != 1 || !strings.Contains(stderr.String(), "--watch needs d2 on PATH") {
 			t.Errorf("run() = %d\nstderr:\n%s\nwant 1 and a missing d2, not a usage error", code, stderr.String())
+		}
+	})
+
+	t.Run("with --version prints the build's module version on stdout and exits 0, whatever else is on the line", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"--version"}, &stdout, &stderr)
+
+		version, found := strings.CutPrefix(stdout.String(), "apiexport-pie ")
+		if code != 0 || !found || strings.TrimSpace(version) == "" || strings.Count(version, "\n") != 1 || stderr.Len() != 0 {
+			t.Errorf("run() = %d\nstdout:\n%s\nstderr:\n%s\nwant 0 and one line: apiexport-pie VERSION", code, stdout.String(), stderr.String())
 		}
 	})
 
