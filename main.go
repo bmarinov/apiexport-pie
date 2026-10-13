@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"syscall"
@@ -27,7 +28,7 @@ const (
 	exitUsage = 2
 )
 
-const usage = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --surface [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --diff [--surface|--style overview [-o FILE]] A B"
+const usage = "usage: apiexport-pie [-v] [--style classic|overview] [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --surface [-o FILE [--watch]] TREE\n       apiexport-pie [-v] --diff [--surface|--style overview [-o FILE]] A B\n       apiexport-pie --version"
 
 // styles are the ways to draw the diagram, by the name --style takes.
 var styles = map[string]func(pie.Model) []byte{"classic": pie.RenderD2, "overview": pie.RenderOverviewD2}
@@ -51,6 +52,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	surface := flags.Bool("surface", false, "print a markdown table instead of the diagram: which workspaces get which kinds, and what they grant")
 	diff := flags.Bool("diff", false, "print what changes from tree A to tree B, a line per change; with --surface, both tables as one in d2; with --style overview, both trees as one overview")
 	styleName := flags.String("style", "classic", "draw the diagram as `STYLE`: classic, a table per consumer and export, or overview, exports in columns between what binds them")
+	version := flags.Bool("version", false, "print the version and exit")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printUsage(stdout, flags)
@@ -59,6 +61,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		report(stderr, "apiexport-pie: %v", err)
 		printUsage(stderr, flags)
 		return exitUsage
+	}
+	if *version {
+		report(stdout, "apiexport-pie %s", buildVersion())
+		return exitOK
 	}
 	in := invocation{trees: flags.NArg(), out: *out, watching: *watching, surface: *surface, diff: *diff}
 	flags.Visit(func(f *flag.Flag) {
@@ -274,6 +280,15 @@ func watchDiagram(ctx context.Context, file string, generate func() ([]byte, []s
 		return exitError
 	}
 	return exitOK
+}
+
+// buildVersion is the module version go install records in the binary, or (devel) for a build
+// from a checkout.
+func buildVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return info.Main.Version
+	}
+	return "(devel)"
 }
 
 func printUsage(w io.Writer, flags *flag.FlagSet) {
