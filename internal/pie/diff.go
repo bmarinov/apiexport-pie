@@ -55,6 +55,7 @@ func RenderDiff(a, b Model) []byte {
 	}
 	diffClaims(&out, a, b)
 	diffConsumers(&out, a, b)
+	diffExisting(&out, a, b)
 	diffFindings(&out, a, b)
 	return out.Bytes()
 }

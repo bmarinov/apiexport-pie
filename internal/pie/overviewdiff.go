@@ -128,14 +128,40 @@ func (o overview) draws(p presence) bool {
 func RenderOverviewDiffD2(a, b Model) []byte {
 	u := diffOverviews(overviewOf(a, true), overviewOf(b, true))
 	notes := lifecycleNotes(a, b)
+	refused := refusedBindings(a, b)
+	for key := range refused {
+		notes[key] = "existing: NamingConflicts"
+	}
+	at := map[string]string{}
 	for i, e := range u.exports {
 		bound := slices.Clone(e.bound)
 		for j, p := range bound {
 			bound[j].note = notes[bindingKey{consumer: p.id, export: e.keys[len(e.keys)-1]}]
 		}
 		u.exports[i].bound = bound
+		at[e.keys[len(e.keys)-1]] = d2Path(append([]string{exportsColumn}, e.keys...)...)
+	}
+	for i, e := range u.edges {
+		for key := range refused {
+			if e.from == d2Path(consumersColumn, key.consumer) && e.to == at[key.export] {
+				u.edges[i].r = bindsRefused
+			}
+		}
 	}
 	return u.d2()
+}
+
+// refusedBindings lists, by the ids of the overview of a diff, the bindings existing workspaces have
+// of an export that serves kinds they keep in their binding of another export, which kcp leaves
+// without those kinds.
+func refusedBindings(a, b Model) map[bindingKey]bool {
+	refused := map[bindingKey]bool{}
+	for _, k := range keptInExisting(a, b) {
+		for _, export := range k.refused {
+			refused[bindingKey{consumer: k.consumer.class + ":" + k.consumer.name, export: "apiexport:" + export}] = true
+		}
+	}
+	return refused
 }
 
 // bindingKey is a binding of an export by a consumer, by their ids in the overview of a diff.

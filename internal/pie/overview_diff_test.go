@@ -136,6 +136,50 @@ func TestOverviewDiffWhenATypeChangesItsBindings(t *testing.T) {
 	}
 }
 
+func TestOverviewDiffWhenExistingWorkspacesKeepKindsThatMoved(t *testing.T) {
+	export := func(name string, resources ...pie.Resource) pie.Export {
+		return pie.Export{Path: "pms/" + name + ".yaml", Doc: 1, Name: name, Resources: resources}
+	}
+	provider := func(exports ...string) pie.WorkspaceType {
+		wt := pie.WorkspaceType{Path: "types/provider.yaml", Doc: 1, Name: "provider"}
+		for _, e := range exports {
+			wt.Binds = append(wt.Binds, pie.ExportRef{Path: "root:pms", Name: e})
+		}
+		return wt
+	}
+	binding := func(file, export string) pie.APIBinding {
+		return pie.APIBinding{Path: file, Doc: 1, Name: export, Export: pie.ExportRef{Path: "root:pms", Name: export}}
+	}
+	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")}
+	a := pie.Model{
+		Schemas:        schemas,
+		Exports:        []pie.Export{export("core.example.io", widgetResource(), gadgetResource())},
+		WorkspaceTypes: []pie.WorkspaceType{provider("core.example.io")},
+		APIBindings:    []pie.APIBinding{binding("d/core.yaml", "core.example.io")},
+	}
+	b := pie.Model{
+		Schemas:        schemas,
+		Exports:        []pie.Export{export("core.example.io", widgetResource()), export("ui.example.io", gadgetResource())},
+		WorkspaceTypes: []pie.WorkspaceType{provider("core.example.io", "ui.example.io")},
+		APIBindings:    []pie.APIBinding{binding("d/core.yaml", "core.example.io"), binding("d/ui.yaml", "ui.example.io")},
+	}
+
+	got := string(pie.RenderOverviewDiffD2(a, b))
+
+	t.Run("the binding of the new export that existing workspaces have is red, and says kcp leaves it without the kinds", func(t *testing.T) {
+		wantBlocks(t, got,
+			`"consumers"."apibindings:d" -> "apiexports"."workspace:root:pms"."apiexport:ui.example.io" {style.stroke: "#e03131"; style.stroke-width: 3}`,
+			legendBindsRefused)
+		if want := fmt.Sprintf("\"story\": %q {class: story;", "bound at provider (new workspaces only), d (existing: NamingConflicts)\nmaximalPermissionPolicy: none"); !strings.Contains(got, want) {
+			t.Errorf("RenderOverviewDiffD2() =\n%s\nwant a line with %s", got, want)
+		}
+	})
+
+	t.Run("a binding existing workspaces do not get stays as it is", func(t *testing.T) {
+		wantBlocks(t, got, `"consumers"."workspacetype:provider" -> "apiexports"."workspace:root:pms"."apiexport:ui.example.io" {style.stroke: "#1098ad"}`)
+	})
+}
+
 func TestOverviewDiffWhenAnExportStopsServingKinds(t *testing.T) {
 	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")}
 	things := pie.Resource{Group: "core.example.io", Name: "things"}

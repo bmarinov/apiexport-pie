@@ -1,7 +1,7 @@
 apiexport-pie
 ===
 
-Visualize [kcp](https://www.kcp.io/) APIExports and relations, without torching the earth for LLM tokens.
+Visualize [kcp](https://www.kcp.io/) APIExports and relations, without torching the earth for tokens.
 
 ## Purpose
 
@@ -77,7 +77,9 @@ repository, or of REMOTE (a remote name, URL or path). `--watch` needs a directo
   directory of APIBinding files) and per APIExport, with arrows from bindings to exports and from claims to the claimed kinds.
 - **overview**: three columns: CONSUMERS -> APIEXPORTS -> RESOURCES.
 - **surface**: a row per kind and per set of claims, columns generated per consumer.
-- **diff**: `added:`, `removed:`, `moved:`, `changed:` lines for exports, kinds, claims, consumers and APIBindings.
+- **diff**: a line per change from A to B.
+  - `added:`, `removed:`, `moved:`, `changed:`: exports, kinds, claims, consumers and APIBindings; as a new workspace gets them.
+  - `existing:`: what workspaces that already exist keep when a kind moves to another export. The old binding keeps serving it; a binding of the new export gets `NamingConflicts`.
 
 Warnings and notices are printed to stderr. Any kind in more than one APIExport is flagged with orange.
 

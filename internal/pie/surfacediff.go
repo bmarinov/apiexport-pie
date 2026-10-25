@@ -12,6 +12,13 @@ const (
 	surfaceRemovedFill = "#eebefa"
 	// lost marks a consumer that no longer gets a row; a hollow dot tells it apart without colour.
 	lost = "○"
+	// Where existing workspaces keep a kind that moved, its row in the export that served it says
+	// existing, in grey, and its row in an export that serves it now says new. refusedMark, in red,
+	// adds that existing workspaces have that binding too, and kcp leaves it without the kind.
+	keptMark        = "● existing"
+	newMark         = "● new"
+	refusedMark     = "✕ existing"
+	surfaceKeptFont = "#495057"
 )
 
 // RenderSurfaceDiffD2 draws the surfaces of a and b as one d2 table: the columns, exports and rows
@@ -20,7 +27,39 @@ const (
 // gets it from no export now. A kind is followed by its resource, so one that moved to another export
 // shows in both and says where it went, and a consumer that gets it through either export keeps its ●.
 func RenderSurfaceDiffD2(a, b Model) []byte {
-	return renderSurfaceD2(surfaceDiffOf(surfaceOf(a), surfaceOf(b)))
+	d := surfaceDiffOf(surfaceOf(a), surfaceOf(b))
+	markExisting(&d, keptInExisting(a, b))
+	return renderSurfaceD2(d)
+}
+
+// markExisting marks, in the column of a consumer whose existing workspaces keep a kind in their
+// binding of the export that served it, that export's row and the rows of those serving it now.
+func markExisting(d *surface, keeps []keep) {
+	for _, k := range keeps {
+		name := k.consumer.name
+		if k.consumer.class == "apibindings" {
+			name = dirConsumerName(name)
+		}
+		col := slices.IndexFunc(d.columns, func(c surfaceColumn) bool { return c.name == name })
+		setKindCell(d, k.export, k.resource, col, []string{keptMark})
+		for _, export := range k.to {
+			cell := []string{newMark}
+			if slices.Contains(k.refused, export) {
+				cell = append(cell, refusedMark)
+			}
+			setKindCell(d, export, k.resource, col, cell)
+		}
+	}
+}
+
+// setKindCell sets a consumer's cell in the row of a kind in an export's block.
+func setKindCell(d *surface, export, resource string, col int, cell []string) {
+	bl := blockOf(*d, export)
+	for i, r := range bl.rows {
+		if r.kind && r.key == resource {
+			bl.rows[i].cells[col] = cell
+		}
+	}
 }
 
 func surfaceDiffOf(before, after surface) surface {

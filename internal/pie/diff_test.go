@@ -325,7 +325,165 @@ added: binding of fga.example.io by WorkspaceType base, for new workspaces only
 changed: WorkspaceType account loses Sprocket.core.example.io; gets Gizmo.core.example.io
 changed: WorkspaceType org loses Gadget.core.example.io, Sprocket.core.example.io; gets Gizmo.core.example.io
 changed: APIBinding directory bind loses Gadget.core.example.io, Sprocket.core.example.io; gets Gizmo.core.example.io
+existing: workspaces of WorkspaceType base keep Gadget.core.example.io in their binding of core.example.io
+existing: workspaces of WorkspaceType account keep Gadget.core.example.io in their binding of core.example.io
 added: notice: API group core.example.io is served by 2 APIExports: core.example.io, fga.example.io
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(pie.RenderDiff(tt.a, tt.b)); got != tt.want {
+				t.Errorf("RenderDiff() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDiffOfWhatExistingWorkspacesKeep(t *testing.T) {
+	gizmos := pie.Resource{Group: "core.example.io", Name: "gizmos", Schema: "v1.gizmos.core.example.io"}
+	gizmoSchema := pie.Schema{Path: "pms/gizmos.yaml", Name: "v1.gizmos.core.example.io", Group: "core.example.io", Kind: "Gizmo", Plural: "gizmos"}
+	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml"), gizmoSchema}
+	export := func(name string, resources ...pie.Resource) pie.Export {
+		return pie.Export{Path: "pms/" + name + ".yaml", Doc: 1, Name: name, Resources: resources}
+	}
+	binds := func(name string, exports ...string) pie.WorkspaceType {
+		wt := pie.WorkspaceType{Path: "types/" + name + ".yaml", Doc: 1, Name: name}
+		for _, e := range exports {
+			wt.Binds = append(wt.Binds, pie.ExportRef{Path: "root:pms", Name: e})
+		}
+		return wt
+	}
+	maintained := func(wt pie.WorkspaceType) pie.WorkspaceType {
+		wt.Maintains = true
+		return wt
+	}
+	extending := func(name, base string) pie.WorkspaceType {
+		return pie.WorkspaceType{Path: "types/" + name + ".yaml", Doc: 1, Name: name, Extends: []pie.TypeRef{{Path: "root", Name: base}}}
+	}
+	binding := func(file, export string) pie.APIBinding {
+		return pie.APIBinding{Path: file, Doc: 1, Name: export, Export: pie.ExportRef{Path: "root:pms", Name: export}}
+	}
+	tests := []struct {
+		name string
+		a, b pie.Model
+		want string
+	}{
+		{
+			name: "existing workspaces keep the kinds that moved in their binding of the old export; a directory's binding of the new one gets none of them; a consumer that binds no export serving them, or only B has, says nothing",
+			a: pie.Model{
+				Schemas: schemas,
+				Exports: []pie.Export{export("core.example.io", widgetResource(), gadgetResource(), gizmos)},
+				WorkspaceTypes: []pie.WorkspaceType{
+					binds("provider", "core.example.io"), binds("org", "core.example.io"),
+				},
+				APIBindings: []pie.APIBinding{binding("d/core.yaml", "core.example.io")},
+			},
+			b: pie.Model{
+				Schemas: schemas,
+				Exports: []pie.Export{export("core.example.io", gizmos), export("ui.example.io", widgetResource(), gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{
+					binds("provider", "core.example.io", "ui.example.io"), binds("org", "core.example.io"), binds("team", "core.example.io", "ui.example.io"),
+				},
+				APIBindings: []pie.APIBinding{binding("d/core.yaml", "core.example.io"), binding("d/ui.yaml", "ui.example.io")},
+			},
+			want: `added: APIExport ui.example.io
+moved: kind Widget.core.example.io from core.example.io to ui.example.io, existing workspaces keep it
+moved: kind Gadget.core.example.io from core.example.io to ui.example.io, existing workspaces keep it
+added: WorkspaceType team, binding core.example.io, ui.example.io
+added: binding of ui.example.io by WorkspaceType provider, for new workspaces only
+added: binding of ui.example.io in d
+changed: WorkspaceType org loses Gadget.core.example.io, Widget.core.example.io
+existing: workspaces of WorkspaceType provider keep Widget.core.example.io, Gadget.core.example.io in their binding of core.example.io
+existing: APIBinding directory d keeps Widget.core.example.io, Gadget.core.example.io in its binding of core.example.io; its binding of ui.example.io does not bind them (NamingConflicts)
+added: notice: API group core.example.io is served by 2 APIExports: core.example.io, ui.example.io
+`,
+		},
+		{
+			name: "a binding of the new export that existing workspaces have, because kcp maintains it or they had it already, gets none of the kinds",
+			a: pie.Model{
+				Schemas: schemas,
+				Exports: []pie.Export{export("core.example.io", widgetResource(), gadgetResource()), export("ui.example.io", gizmos)},
+				WorkspaceTypes: []pie.WorkspaceType{
+					binds("org", "core.example.io"), binds("account", "core.example.io", "ui.example.io"),
+				},
+			},
+			b: pie.Model{
+				Schemas: schemas,
+				Exports: []pie.Export{export("core.example.io", widgetResource()), export("ui.example.io", gizmos, gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{
+					maintained(binds("org", "core.example.io", "ui.example.io")), binds("account", "core.example.io", "ui.example.io"),
+				},
+			},
+			want: `moved: kind Gadget.core.example.io from core.example.io to ui.example.io, existing workspaces keep it
+added: binding of ui.example.io by WorkspaceType org, for existing workspaces too
+changed: WorkspaceType org gets Gizmo.core.example.io
+existing: workspaces of WorkspaceType org keep Gadget.core.example.io in their binding of core.example.io; their binding of ui.example.io does not bind them (NamingConflicts)
+existing: workspaces of WorkspaceType account keep Gadget.core.example.io in their binding of core.example.io; their binding of ui.example.io does not bind them (NamingConflicts)
+`,
+		},
+		{
+			name: "a type that extends one whose new binding kcp maintains has it in existing workspaces too",
+			a: pie.Model{
+				Schemas:        schemas,
+				Exports:        []pie.Export{export("core.example.io", widgetResource(), gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{binds("base", "core.example.io"), extending("account", "base")},
+			},
+			b: pie.Model{
+				Schemas:        schemas,
+				Exports:        []pie.Export{export("core.example.io", widgetResource()), export("ui.example.io", gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{maintained(binds("base", "core.example.io", "ui.example.io")), extending("account", "base")},
+			},
+			want: `added: APIExport ui.example.io
+moved: kind Gadget.core.example.io from core.example.io to ui.example.io, existing workspaces keep it
+added: binding of ui.example.io by WorkspaceType base, for existing workspaces too
+existing: workspaces of WorkspaceType base keep Gadget.core.example.io in their binding of core.example.io; their binding of ui.example.io does not bind them (NamingConflicts)
+existing: workspaces of WorkspaceType account keep Gadget.core.example.io in their binding of core.example.io; their binding of ui.example.io does not bind them (NamingConflicts)
+added: notice: API group core.example.io is served by 2 APIExports: core.example.io, ui.example.io
+`,
+		},
+		{
+			name: "nothing is said of existing workspaces when the old export is gone from B, or still serves the kind",
+			a: pie.Model{
+				Schemas: schemas,
+				Exports: []pie.Export{export("old.example.io", widgetResource()), export("core.example.io", gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{
+					binds("org", "old.example.io", "core.example.io"), binds("account", "core.example.io"),
+				},
+			},
+			b: pie.Model{
+				Schemas: schemas,
+				Exports: []pie.Export{export("core.example.io", gadgetResource(), widgetResource()), export("ui.example.io", gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{
+					binds("org", "core.example.io"), binds("account", "core.example.io", "ui.example.io"),
+				},
+			},
+			want: `removed: APIExport old.example.io
+added: APIExport ui.example.io
+moved: kind Widget.core.example.io from old.example.io to core.example.io
+added: kind Gadget.core.example.io in ui.example.io
+removed: binding of old.example.io by WorkspaceType org, existing workspaces keep it
+added: binding of ui.example.io by WorkspaceType account, for new workspaces only
+changed: WorkspaceType account gets Widget.core.example.io
+added: warning: WorkspaceType account binds core.example.io and ui.example.io, which both serve gadgets.core.example.io; kcp binds only one of them
+changed: notice: API group core.example.io is served by 2 APIExports: core.example.io, ui.example.io
+`,
+		},
+		{
+			name: "nor when the consumer bound two exports serving the kind in A, as either binding may have it",
+			a: pie.Model{
+				Schemas:        schemas,
+				Exports:        []pie.Export{export("core.example.io", gadgetResource()), export("spare.example.io", gadgetResource())},
+				WorkspaceTypes: []pie.WorkspaceType{binds("account", "core.example.io", "spare.example.io")},
+			},
+			b: pie.Model{
+				Schemas:        schemas,
+				Exports:        []pie.Export{export("core.example.io", gadgetResource()), export("spare.example.io")},
+				WorkspaceTypes: []pie.WorkspaceType{binds("account", "core.example.io", "spare.example.io")},
+			},
+			want: `removed: kind Gadget.core.example.io from spare.example.io, existing workspaces keep it
+removed: warning: WorkspaceType account binds core.example.io and spare.example.io, which both serve gadgets.core.example.io; kcp binds only one of them
+removed: notice: API group core.example.io is served by 2 APIExports: core.example.io, spare.example.io
 `,
 		},
 	}

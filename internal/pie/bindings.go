@@ -197,7 +197,7 @@ func consumersOf(m Model) []consumer {
 			}
 		}
 		consumers = append(consumers, consumer{
-			name:     "APIBindings in " + dir.dir,
+			name:     dirConsumerName(dir.dir),
 			column:   append([]string{"APIBindings in"}, strings.SplitAfter(dir.dir, "/")...),
 			exports:  exportsOf(dir.bound),
 			kcp:      kcpOf(dir.bound),
@@ -206,6 +206,9 @@ func consumersOf(m Model) []consumer {
 	}
 	return consumers
 }
+
+// dirConsumerName names the consumer a directory of APIBinding files is.
+func dirConsumerName(dir string) string { return "APIBindings in " + dir }
 
 // universalRef is how a type extends root:universal, the WorkspaceType kcp creates in every
 // installation (config/root/workspacetype-universal.yaml, the same from kcp v0.31 to v0.33).
