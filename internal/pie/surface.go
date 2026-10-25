@@ -358,7 +358,29 @@ func renderSurfaceD2(s surface) []byte {
 				if c < len(row.cellChanges) {
 					cellChange = row.cellChanges[c]
 				}
-				cell(2+c, lines, fillOf(cellChange, shade)...)
+				fill := fillOf(cellChange, shade)
+				switch {
+				case slices.Contains(lines, refusedMark):
+					// d2 colours a label as a whole, so the red line is a box of its own.
+					fmt.Fprintf(&b, "%q: \"\" {\n", fmt.Sprintf("r%dc%d", r, 2+c))
+					for _, style := range fill {
+						b.WriteString("  " + style + "\n")
+					}
+					b.WriteString("  grid-columns: 1\n  grid-gap: 0\n")
+					for k, line := range lines {
+						colour := ""
+						if line == refusedMark {
+							colour = fmt.Sprintf("; style.font-color: %q", refusedFill)
+						}
+						fmt.Fprintf(&b, "  %q: %q {style.stroke: transparent; style.fill: transparent; style.font-size: %d; style.bold: false%s; height: %d}\n",
+							fmt.Sprintf("l%d", k), line, surfaceFontSize, colour, surfaceLineHeight)
+					}
+					b.WriteString("}\n")
+				case slices.Equal(lines, []string{keptMark}):
+					cell(2+c, lines, slices.Concat(fill, []string{fmt.Sprintf("style.font-color: %q", surfaceKeptFont)})...)
+				default:
+					cell(2+c, lines, fill...)
+				}
 			}
 		}
 	}

@@ -490,6 +490,48 @@ func TestSurfaceD2OfClaimsThatWrite(t *testing.T) {
 	}
 }
 
+func TestSurfaceDiffOfWhatExistingWorkspacesKeep(t *testing.T) {
+	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")}
+	export := func(name string, resources ...pie.Resource) pie.Export {
+		return pie.Export{Path: "pms/" + name + ".yaml", Doc: 1, Name: name, Resources: resources}
+	}
+	provider := func(exports ...string) pie.WorkspaceType {
+		wt := pie.WorkspaceType{Path: "types/provider.yaml", Doc: 1, Name: "provider"}
+		for _, e := range exports {
+			wt.Binds = append(wt.Binds, pie.ExportRef{Path: "root:pms", Name: e})
+		}
+		return wt
+	}
+	binding := func(file, export string) pie.APIBinding {
+		return pie.APIBinding{Path: file, Doc: 1, Name: export, Export: pie.ExportRef{Path: "root:pms", Name: export}}
+	}
+	a := pie.Model{
+		Schemas:        schemas,
+		Exports:        []pie.Export{export("core.example.io", widgetResource(), gadgetResource())},
+		WorkspaceTypes: []pie.WorkspaceType{provider("core.example.io")},
+		APIBindings:    []pie.APIBinding{binding("d/core.yaml", "core.example.io")},
+	}
+	b := pie.Model{
+		Schemas:        schemas,
+		Exports:        []pie.Export{export("core.example.io", widgetResource()), export("ui.example.io", gadgetResource())},
+		WorkspaceTypes: []pie.WorkspaceType{provider("core.example.io", "ui.example.io")},
+		APIBindings:    []pie.APIBinding{binding("d/core.yaml", "core.example.io"), binding("d/ui.yaml", "ui.example.io")},
+	}
+
+	wantBlocks(t, string(pie.RenderSurfaceDiffD2(a, b)),
+		`"r2c1": "Gadget · moved to ui.example.io" {style.fill: "#eebefa"; label.near: center-left; height: 34}
+"r2c2": "● existing" {style.font-color: "#495057"; height: 34}
+"r2c3": "● existing" {style.font-color: "#495057"; height: 34}`,
+		`"r3c2": "● new" {style.fill: "#f4f6fb"; height: 34}
+"r3c3": "" {
+  style.fill: "#f4f6fb"
+  grid-columns: 1
+  grid-gap: 0
+  "l0": "● new" {style.stroke: transparent; style.fill: transparent; style.font-size: 14; style.bold: false; height: 20}
+  "l1": "✕ existing" {style.stroke: transparent; style.fill: transparent; style.font-size: 14; style.bold: false; style.font-color: "#e03131"; height: 20}
+}`)
+}
+
 func TestSurfaceDiff(t *testing.T) {
 	schemas := []pie.Schema{widgetSchemaAt("pms/widgets.yaml"), gadgetSchemaAt("pms/gadgets.yaml")}
 	export := func(name string, resources []pie.Resource, claims ...pie.Claim) pie.Export {
@@ -534,13 +576,13 @@ grid-gap: 0
 "r1c5": "○" {style.fill: "#eebefa"; height: 34}
 "r2c0": "" {height: 34}
 "r2c1": "Gadget · moved to fga.example.io" {style.fill: "#eebefa"; label.near: center-left; height: 34}
-"r2c2": "" {height: 34}
+"r2c2": "● existing" {style.font-color: "#495057"; height: 34}
 "r2c3": "" {height: 34}
 "r2c4": "" {height: 34}
 "r2c5": "" {height: 34}
 "r3c0": "fga.example.io" {style.fill: "#c5f6fa"; style.bold: true; height: 34}
 "r3c1": "Gadget · core.example.io · moved from core.example.io" {style.fill: "#c5f6fa"; label.near: center-left; height: 34}
-"r3c2": "●" {style.fill: "#f4f6fb"; height: 34}
+"r3c2": "● new" {style.fill: "#f4f6fb"; height: 34}
 "r3c3": "○" {style.fill: "#eebefa"; height: 34}
 "r3c4": "+●" {style.fill: "#c5f6fa"; height: 34}
 "r3c5": "○" {style.fill: "#eebefa"; height: 34}
